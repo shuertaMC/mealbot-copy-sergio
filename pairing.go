@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"os"
+	"sort"
+	"time"
 	"strings"
 
 	"github.com/johnamadeo/server"
@@ -58,6 +60,7 @@ type Round struct {
 	Pairs            map[Pair]bool
 	Paired           map[string]bool
 	DrawOrderedPairs []Pair // for logging; keeps order in which pairs were made
+	RecentMatches    int    // number of pairs that were matched again within RecentRoundRange
 }
 
 // NewRound :
@@ -128,30 +131,44 @@ func (mm MembersMap) String() string {
 	return str
 }
 
-type RandomIntGenerator func(int) int
+// Clone : Deep copy of the members map (including each member's LastRoundWith)
+func (mm MembersMap) Clone() MembersMap {
+	out := make(MembersMap, len(mm))
+	for id, member := range mm {
+		lastRoundWith := make(map[string]int, len(member.LastRoundWith))
+		for partnerID, lastRound := range member.LastRoundWith {
+			lastRoundWith[partnerID] = lastRound
+		}
+		member.LastRoundWith = lastRoundWith
+		out[id] = member
+	}
+	return out
+}
 
-func runPairingAlgorithm(members MembersMap, roundNum int, genRandomInt RandomIntGenerator) (MembersMap, Round) {
-	memberIds := []string{}
+// runPairingAlgorithm : Pair up members for one round. All randomness comes from rng so
+// that callers (and tests) can inject a seeded generator. Members and candidates are
+// visited in sorted order so that a seeded rng yields a reproducible round.
+func runPairingAlgorithm(members MembersMap, roundNum int, rng *rand.Rand) (MembersMap, Round) {
+	memberIds := make([]string, 0, len(members))
 	for id := range members {
 		memberIds = append(memberIds, id)
 	}
+	sort.Strings(memberIds)
 
 	tries := 0
 	var round Round
+	var tempMembers MembersMap
 	// retry until a) a round w/o repeats is found, or b) MaxTries is reached
 	for {
-		// Make a deep copy of the members map
-		bytes, _ := json.Marshal(members)
-		var tempMembers MembersMap
-		json.Unmarshal(bytes, &tempMembers)
+		tempMembers = members.Clone()
 
 		round = NewRound(roundNum)
 		numRecentMatches := 0
 
-		// hold out odd member out and add it back in at the end of round
+		// hold out odd member out
 		var extraMemberID string
 		if len(tempMembers)%2 == 1 {
-			extraMemberID = memberIds[genRandomInt(len(memberIds))]
+			extraMemberID = memberIds[rng.IntN(len(memberIds))]
 		}
 
 		for _, memberID := range memberIds {
@@ -161,51 +178,65 @@ func runPairingAlgorithm(members MembersMap, roundNum int, genRandomInt RandomIn
 
 			member := tempMembers[memberID]
 
+			candidateIDs := make([]string, 0, len(member.LastRoundWith))
+			for candidateID := range member.LastRoundWith {
+				candidateIDs = append(candidateIDs, candidateID)
+			}
+			sort.Strings(candidateIDs)
+
 			var goodCandidates, okCandidates, badCandidates []MinimalMember
-			for candidateID, lastRound := range member.LastRoundWith {
+			for _, candidateID := range candidateIDs {
+				candidate, known := members[candidateID]
+				if !known || candidateID == memberID {
+					continue
+				}
 				if round.IsPaired(candidateID) || candidateID == extraMemberID {
 					continue
 				}
 
+				lastRound := member.LastRoundWith[candidateID]
 				notRecentlyMatched := lastRound == -1 || round.Number-lastRound > RecentRoundRange
-				hasDifferentTraits := member.Trait == members[candidateID].Trait
+				// NOTE: the name is misleading; this has always been true when the traits are EQUAL
+				hasDifferentTraits := member.Trait == candidate.Trait
 
 				switch {
 				case notRecentlyMatched && hasDifferentTraits:
-					goodCandidates = append(goodCandidates, members[candidateID])
+					goodCandidates = append(goodCandidates, candidate)
 				case notRecentlyMatched && !hasDifferentTraits:
-					okCandidates = append(okCandidates, members[candidateID])
+					okCandidates = append(okCandidates, candidate)
 				default:
-					badCandidates = append(badCandidates, members[candidateID])
+					badCandidates = append(badCandidates, candidate)
 				}
 			}
 
-			var partner MinimalMember
+			var pool []MinimalMember
 			switch {
 			case len(goodCandidates) > 0:
-				partner = selectRandomPartner(genRandomInt, goodCandidates)
+				pool = goodCandidates
 			case len(okCandidates) > 0:
-				partner = selectRandomPartner(genRandomInt, okCandidates)
-			default:
-				partner = selectRandomPartner(genRandomInt, badCandidates)
+				pool = okCandidates
+			case len(badCandidates) > 0:
+				pool = badCandidates
 				numRecentMatches++
+			default:
+				// nobody left to pair with
+				continue
 			}
 
+			partner := pool[rng.IntN(len(pool))]
 			round.AddPair(memberID, partner.ID)
 			tempMembers.UpdateLastRoundWith(memberID, partner.ID, round.Number)
 		}
 
 		tries++
+		round.RecentMatches = numRecentMatches
 
 		if numRecentMatches == 0 || tries == MaxTries {
-			members = tempMembers
-			fmt.Println(round)
-			fmt.Printf("%d recent matches\n", numRecentMatches)
 			break
 		}
 	}
 
-	return members, round
+	return tempMembers, round
 }
 
 func runPairingRound(orgname string, roundNum int, testMode bool) error {
@@ -214,7 +245,8 @@ func runPairingRound(orgname string, roundNum int, testMode bool) error {
 		return err
 	}
 
-	members, round := runPairingAlgorithm(members, roundNum, rand.Intn)
+	rng := rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0))
+	members, round := runPairingAlgorithm(members, roundNum, rng)
 
 	if !testMode {
 		err = sendEmails(orgname, round, members)
@@ -243,10 +275,6 @@ func sendEmails(orgname string, round Round, members MembersMap) error {
 	}
 
 	return nil
-}
-
-func selectRandomPartner(genRandomInt RandomIntGenerator, members []MinimalMember) MinimalMember {
-	return members[genRandomInt(len(members))]
 }
 
 func getMinimalMembersFromDB(orgname string) (MembersMap, error) {
