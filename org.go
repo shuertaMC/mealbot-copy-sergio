@@ -8,7 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 
-	"github.com/johnamadeo/server"
+	"github.com/johnamadeo/mealbot/internal/server"
 )
 
 // Organization :

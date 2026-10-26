@@ -10,7 +10,7 @@ import (
 	"time"
 	"strings"
 
-	"github.com/johnamadeo/server"
+	"github.com/johnamadeo/mealbot/internal/server"
 	mailgun "github.com/mailgun/mailgun-go"
 )
 

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/johnamadeo/server"
+	"github.com/johnamadeo/mealbot/internal/server"
 )
 
 // GetPairsResponsePair : Data structure for a pairing

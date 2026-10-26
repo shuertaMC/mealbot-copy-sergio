@@ -3,7 +3,7 @@ package main
 import (
 	"net/http"
 
-	"github.com/johnamadeo/server"
+	"github.com/johnamadeo/mealbot/internal/server"
 	log "github.com/sirupsen/logrus"
 )
 

@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/johnamadeo/server"
+	"github.com/johnamadeo/mealbot/internal/server"
 )
 
 const (
