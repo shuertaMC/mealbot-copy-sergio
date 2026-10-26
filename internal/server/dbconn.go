@@ -1,48 +1,34 @@
+// Package server holds small helpers shared by the HTTP API and the CLI modes:
+// database connection setup, JSONB column support and JSON message responses.
 package server
 
 import (
 	"database/sql"
-	"fmt"
-	"os"
+	"errors"
 
-	_ "github.com/lib/pq"
+	// Registers the "pgx" database/sql driver.
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-type LocalDBConnection struct {
-	User   string
-	DBName string
-}
+// Driver is the database/sql driver name registered by pgx's stdlib package.
+const Driver = "pgx"
 
-const (
-	Driver = "postgres"
-)
+// ErrNoDatabaseURL is returned when no database URL was configured.
+var ErrNoDatabaseURL = errors.New("DATABASE_URL is not set")
 
-func CreateDBConnection(conn LocalDBConnection) (*sql.DB, error) {
-	var dataSource string
-
-	// When deployed in production on Heroku, the DATABASE_URL environment will
-	// be set on Heroku machines, and we don't need to manually create the
-	// database URL. For more:
-	// https://devcenter.heroku.com/articles/heroku-postgresql#provisioning-heroku-postgres
-	if dbURL, ok := os.LookupEnv("DATABASE_URL"); ok {
-		dataSource = dbURL
-	} else {
-		dataSource = createLocalDBUrl(conn)
+// CreateDBConnection opens a pooled connection to the Postgres database at
+// databaseURL. sql.Open does not dial the database; callers that want to fail
+// fast should follow up with db.PingContext.
+func CreateDBConnection(databaseURL string) (*sql.DB, error) {
+	if databaseURL == "" {
+		return nil, ErrNoDatabaseURL
 	}
 
-	db, err := sql.Open(Driver, dataSource)
+	db, err := sql.Open(Driver, databaseURL)
 	if err != nil {
-		db.Close()
-		return db, err
+		// db is nil when sql.Open fails, so there is nothing to close
+		return nil, err
 	}
 
 	return db, nil
-}
-
-func createLocalDBUrl(conn LocalDBConnection) string {
-	return fmt.Sprintf(
-		"user=%s dbname=%s sslmode=disable",
-		conn.User,
-		conn.DBName,
-	)
 }

@@ -6,55 +6,58 @@ import (
 	"errors"
 )
 
-// Copied from https://github.com/jinzhu/gorm/issues/516#issuecomment-109055198
-// For inserting/retrieving JSONB types from a Postgres database
+// JSONB is a raw JSON document stored in a Postgres JSONB column.
+// Originally copied from https://github.com/jinzhu/gorm/issues/516#issuecomment-109055198
 type JSONB []byte
 
+// Value implements driver.Valuer. The document is sent as text so Postgres
+// parses it as JSON; empty and "null" documents are stored as SQL NULL.
 func (j JSONB) Value() (driver.Value, error) {
 	if j.IsNull() {
-		//      log.Trace("returning null")
 		return nil, nil
 	}
 	return string(j), nil
 }
 
+// Scan implements sql.Scanner; drivers may hand back either text or bytes.
 func (j *JSONB) Scan(value interface{}) error {
-	if value == nil {
+	switch v := value.(type) {
+	case nil:
 		*j = nil
-		return nil
+	case []byte:
+		// the driver may reuse the slice, so copy it
+		*j = append((*j)[0:0], v...)
+	case string:
+		*j = append((*j)[0:0], v...)
+	default:
+		return errors.New("JSONB scan source was not string or []byte")
 	}
-	s, ok := value.([]byte)
-	if !ok {
-		return errors.New("Scan source was not string")
-	}
-	// I think I need to make a copy of the bytes.
-	// It seems the byte slice passed in is re-used
-	*j = append((*j)[0:0], s...)
-
 	return nil
 }
 
-// MarshalJSON returns *m as the JSON encoding of m.
-func (m JSONB) MarshalJSON() ([]byte, error) {
-	if m == nil {
+// MarshalJSON returns j as the JSON encoding of itself.
+func (j JSONB) MarshalJSON() ([]byte, error) {
+	if j == nil {
 		return []byte("null"), nil
 	}
-	return m, nil
+	return j, nil
 }
 
-// UnmarshalJSON sets *m to a copy of data.
-func (m *JSONB) UnmarshalJSON(data []byte) error {
-	if m == nil {
-		return errors.New("json.RawMessage: UnmarshalJSON on nil pointer")
+// UnmarshalJSON sets *j to a copy of data.
+func (j *JSONB) UnmarshalJSON(data []byte) error {
+	if j == nil {
+		return errors.New("JSONB: UnmarshalJSON on nil pointer")
 	}
-	*m = append((*m)[0:0], data...)
+	*j = append((*j)[0:0], data...)
 	return nil
 }
 
+// IsNull reports whether j is empty or the JSON null literal.
 func (j JSONB) IsNull() bool {
 	return len(j) == 0 || string(j) == "null"
 }
 
-func (j JSONB) Equals(j1 JSONB) bool {
-	return bytes.Equal([]byte(j), []byte(j1))
+// Equals reports whether two documents are byte-for-byte equal.
+func (j JSONB) Equals(other JSONB) bool {
+	return bytes.Equal(j, other)
 }
