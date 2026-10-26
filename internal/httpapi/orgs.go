@@ -1,9 +1,7 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 
 	"github.com/johnamadeo/mealbot/internal/server"
@@ -22,11 +20,11 @@ type SetCrossMatchTraitRequestBody struct {
 var errMissingAdmin = errors.New("request query parameters must contain 'admin'")
 
 func getAdminParam(r *http.Request) (string, error) {
-	queries, ok := r.URL.Query()["admin"]
-	if !ok || len(queries) > 1 {
+	admin, ok := singleQueryValue(r, "admin")
+	if !ok {
 		return "", errMissingAdmin
 	}
-	return queries[0], nil
+	return admin, nil
 }
 
 // getOrganizations : GET /orgs?admin=... fetches all the organizations an admin manages
@@ -45,28 +43,15 @@ func (s *Server) getOrganizations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bytes, err := json.Marshal(map[string][]string{"orgs": organizations})
-	if err != nil {
-		s.writeInternalError(w, err, function)
-		return
-	}
-
-	s.writeOK(w, bytes, function)
+	s.writeJSON(w, map[string][]string{"orgs": organizations}, function)
 }
 
 // createOrganization : POST /org?admin=... creates a new organization
 func (s *Server) createOrganization(w http.ResponseWriter, r *http.Request) {
 	function := "CreateOrganizationHandler"
 
-	bytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.writeBadRequest(w, err, function)
-		return
-	}
-	defer r.Body.Close()
-
 	var body CreateOrganizationRequestBody
-	if err := json.Unmarshal(bytes, &body); err != nil {
+	if err := decodeBody(r, &body); err != nil {
 		s.writeBadRequest(w, err, function)
 		return
 	}
@@ -95,15 +80,8 @@ func (s *Server) setCrossMatchTrait(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.writeBadRequest(w, errors.New("Malformed body."), function)
-		return
-	}
-	defer r.Body.Close()
-
 	var body SetCrossMatchTraitRequestBody
-	if err := json.Unmarshal(bytes, &body); err != nil {
+	if err := decodeBody(r, &body); err != nil {
 		s.writeBadRequest(w, errors.New("Request body is malformed"), function)
 		return
 	}

@@ -54,13 +54,13 @@ All routes except `/healthz` and the static files require an Auth0 access token
 | `DELETE /round?org=&roundId=` | Cancel a round |
 | `GET /pairs?org=` | Pairings of every round |
 
-A non-numeric `roundId` is rejected with `400`.
+Malformed input is rejected with `400` (the original service returned `500`): a non-numeric `roundId`, a missing or malformed `members` upload, and an invalid or empty CSV.
 
 ## Tests
 - `go test ./...` runs everything. The integration tests start Postgres with
   [testcontainers-go](https://golang.testcontainers.org/) and load `schema.sql`;
   they are skipped when Docker is not available (set `MEALBOT_REQUIRE_DOCKER=1` to fail instead).
-- CI runs `go mod tidy`, `go mod download`, `go build`, `go vet ./...`, a license check and `go test -race ./...` (see `.github/workflows/ci.yml`).
+- CI checks that `go.mod`/`go.sum` are tidy, then runs `go mod download`, `go build`, `go vet ./...`, a license check and `go test -race ./...` (see `.github/workflows/ci.yml`).
 - `scripts/check-licenses.sh` runs the same license check locally (go-licenses; allowed: MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, MPL-2.0).
 
 ## Layout
@@ -76,5 +76,5 @@ A non-numeric `roundId` is rejected with `400`.
 - `schema.sql`: database schema; `static/`: static files; `testdata/`: sample CSVs
 
 # Miscellanea
-- Package management is handled w/ Go Modules (https://go.dev/blog/using-go-modules). `go.sum` is not committed; it is produced by `go mod tidy`.
+- Package management is handled w/ Go Modules (https://go.dev/blog/using-go-modules). `go.sum` is committed; keep it current with `go mod tidy`.
 - Deployed on Heroku: see `Procfile`

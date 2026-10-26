@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -29,13 +28,7 @@ func (s *Server) getRounds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bytes, err := json.Marshal(GetRoundsResponse{Rounds: rounds})
-	if err != nil {
-		s.writeInternalError(w, err, function)
-		return
-	}
-
-	s.writeOK(w, bytes, function)
+	s.writeJSON(w, GetRoundsResponse{Rounds: rounds}, function)
 }
 
 // postRound : POST /round schedules a new round, or reschedules one when 'roundId' is given

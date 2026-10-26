@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/johnamadeo/mealbot/internal/store"
@@ -59,11 +58,5 @@ func (s *Server) getPairs(w http.ResponseWriter, r *http.Request) {
 		roundPairs = append(roundPairs, responsePairs)
 	}
 
-	bytes, err := json.Marshal(GetPairsResponse{RoundPairs: roundPairs})
-	if err != nil {
-		s.writeInternalError(w, err, function)
-		return
-	}
-
-	s.writeOK(w, bytes, function)
+	s.writeJSON(w, GetPairsResponse{RoundPairs: roundPairs}, function)
 }

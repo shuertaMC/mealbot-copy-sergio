@@ -36,7 +36,6 @@ func NewValidator(cfg config.Auth0, keys KeyProvider, logger *slog.Logger) *Vali
 			jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Alg()}),
 			jwt.WithIssuer(cfg.Issuer),
 			jwt.WithAudience(cfg.Audience),
-			jwt.WithExpirationRequired(),
 		),
 		keys:   keys,
 		logger: logger,

@@ -3,7 +3,6 @@ package httpapi
 import (
 	"bufio"
 	"encoding/csv"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -60,17 +59,11 @@ func (s *Server) getMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bytes, err := json.Marshal(GetMembersResponse{
+	s.writeJSON(w, GetMembersResponse{
 		Members:         memberResponses,
 		Traits:          traits,
 		CrossMatchTrait: crossMatchTrait,
-	})
-	if err != nil {
-		s.writeInternalError(w, err, function)
-		return
-	}
-
-	s.writeOK(w, bytes, function)
+	}, function)
 }
 
 // createMembers : POST /members?org=... replaces the members of an organization with the ones in an uploaded CSV
@@ -117,16 +110,10 @@ func (s *Server) createMembers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	bytes, err := json.Marshal(CreateMembersResponse{
+	s.writeJSON(w, CreateMembersResponse{
 		Members: memberResponses,
 		Traits:  traits,
-	})
-	if err != nil {
-		s.writeInternalError(w, err, function)
-		return
-	}
-
-	s.writeOK(w, bytes, function)
+	}, function)
 }
 
 // traitsOf lists the keys of a member other than name and email, sorted.

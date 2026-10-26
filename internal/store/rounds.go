@@ -15,30 +15,13 @@ type RoundRef struct {
 
 // GetRounds returns the formatted dates of all rounds of an organization, ordered by round id.
 func (s *Store) GetRounds(ctx context.Context, orgname string) ([]string, error) {
-	rows, err := s.db.QueryContext(
+	return queryNames(
 		ctx,
+		s.db,
 		"SELECT to_char(scheduled_date, $1) FROM rounds WHERE organization = $2 ORDER BY id ASC",
 		TimestampFormat,
 		orgname,
 	)
-	if err != nil {
-		return []string{}, err
-	}
-	defer rows.Close()
-
-	rounds := []string{}
-	for rows.Next() {
-		var roundDate string
-		if err := rows.Scan(&roundDate); err != nil {
-			return []string{}, err
-		}
-		rounds = append(rounds, roundDate)
-	}
-	if err := rows.Err(); err != nil {
-		return []string{}, err
-	}
-
-	return rounds, nil
 }
 
 // AddRound schedules a new round, numbered after the organization's last round.

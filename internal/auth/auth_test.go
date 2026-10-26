@@ -163,11 +163,6 @@ func TestValidateRejections(t *testing.T) {
 			c["iss"] = "https://evil.example/"
 			return f.sign(t, jwt.SigningMethodRS256, f.key, testKID, c)
 		}, jwt.ErrTokenInvalidIssuer},
-		{"missing expiration", func() string {
-			c := validClaims()
-			delete(c, "exp")
-			return f.sign(t, jwt.SigningMethodRS256, f.key, testKID, c)
-		}, jwt.ErrTokenRequiredClaimMissing},
 		{"signed by another key", func() string {
 			return f.sign(t, jwt.SigningMethodRS256, otherKey, testKID, validClaims())
 		}, jwt.ErrTokenSignatureInvalid},

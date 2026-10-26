@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"database/sql/driver"
 	"errors"
 )
@@ -55,9 +54,4 @@ func (j *JSONB) UnmarshalJSON(data []byte) error {
 // IsNull reports whether j is empty or the JSON null literal.
 func (j JSONB) IsNull() bool {
 	return len(j) == 0 || string(j) == "null"
-}
-
-// Equals reports whether two documents are byte-for-byte equal.
-func (j JSONB) Equals(other JSONB) bool {
-	return bytes.Equal(j, other)
 }

@@ -14,9 +14,10 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # go.sum is not committed; it is produced here by `go mod tidy`.
-      - name: Tidy modules
-        run: go mod tidy
+      - name: Check modules are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
 
       - name: Download modules
         run: go mod download
