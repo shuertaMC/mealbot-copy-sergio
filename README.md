@@ -52,9 +52,9 @@ All routes except `/healthz` and the static files require an Auth0 access token
 | `GET /rounds?org=` | Scheduled round dates |
 | `POST /round?org=&round=` | Schedule a round; add `roundId=` to reschedule it |
 | `DELETE /round?org=&roundId=` | Cancel a round |
+| `GET /pairs?org=` | Pairings of every round |
 
 A non-numeric `roundId` is rejected with `400`.
-| `GET /pairs?org=` | Pairings of every round |
 
 ## Tests
 - `go test ./...` runs everything. The integration tests start Postgres with
