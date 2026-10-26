@@ -1,4 +1,4 @@
-package main
+package pairing
 
 import (
 	"math/rand/v2"
@@ -41,7 +41,7 @@ func getMockMembersMap(t *testing.T, numMembers int) MembersMap {
 
 func TestPairingEvenMembersAllPaired(t *testing.T) {
 	members := getMockMembersMap(t, 6)
-	updated, round := runPairingAlgorithm(members, 0, newTestRand(1))
+	updated, round := Run(members, 0, newTestRand(1))
 
 	if len(round.Pairs) != 3 || len(round.DrawOrderedPairs) != 3 {
 		t.Fatalf("expected 3 pairs, got %d", len(round.Pairs))
@@ -61,7 +61,7 @@ func TestPairingEvenMembersAllPaired(t *testing.T) {
 
 func TestPairingOddMembersHoldsOneOut(t *testing.T) {
 	members := getMockMembersMap(t, 5)
-	_, round := runPairingAlgorithm(members, 3, newTestRand(7))
+	_, round := Run(members, 3, newTestRand(7))
 
 	if len(round.Pairs) != 2 {
 		t.Fatalf("expected 2 pairs, got %d", len(round.Pairs))
@@ -81,13 +81,13 @@ func TestPairingDeterministicForSameSeed(t *testing.T) {
 
 func runOnce(t *testing.T, seed uint64) string {
 	t.Helper()
-	_, round := runPairingAlgorithm(getMockMembersMap(t, 8), 0, newTestRand(seed))
+	_, round := Run(getMockMembersMap(t, 8), 0, newTestRand(seed))
 	return round.String()
 }
 
 func TestPairingDoesNotMutateInput(t *testing.T) {
 	members := getMockMembersMap(t, 4)
-	runPairingAlgorithm(members, 2, newTestRand(3))
+	Run(members, 2, newTestRand(3))
 	for id, member := range members {
 		for partner, lastRound := range member.LastRoundWith {
 			if lastRound != -1 {
@@ -104,7 +104,7 @@ func TestPairingAvoidsRecentMatches(t *testing.T) {
 	members["b@gmail.com"].LastRoundWith["a@gmail.com"] = 4
 
 	for seed := uint64(0); seed < 20; seed++ {
-		_, round := runPairingAlgorithm(members, 5, newTestRand(seed))
+		_, round := Run(members, 5, newTestRand(seed))
 		if round.RecentMatches != 0 {
 			t.Fatalf("seed %d: expected no recent matches, got %d", seed, round.RecentMatches)
 		}
@@ -119,7 +119,7 @@ func TestPairingReportsRecentMatchesWhenUnavoidable(t *testing.T) {
 	members["a@gmail.com"].LastRoundWith["b@gmail.com"] = 1
 	members["b@gmail.com"].LastRoundWith["a@gmail.com"] = 1
 
-	_, round := runPairingAlgorithm(members, 2, newTestRand(1))
+	_, round := Run(members, 2, newTestRand(1))
 	if len(round.Pairs) != 1 || round.RecentMatches != 1 {
 		t.Errorf("expected 1 pair with 1 recent match, got %d pairs, %d recent", len(round.Pairs), round.RecentMatches)
 	}
@@ -140,7 +140,7 @@ func TestPairingPrefersEqualTraitCandidates(t *testing.T) {
 	}
 
 	for seed := uint64(0); seed < 10; seed++ {
-		_, round := runPairingAlgorithm(members, 0, newTestRand(seed))
+		_, round := Run(members, 0, newTestRand(seed))
 		if !round.Pairs[NewPair("a@gmail.com", "b@gmail.com")] || !round.Pairs[NewPair("c@gmail.com", "d@gmail.com")] {
 			t.Fatalf("seed %d: unexpected pairs %s", seed, round)
 		}
@@ -148,12 +148,12 @@ func TestPairingPrefersEqualTraitCandidates(t *testing.T) {
 }
 
 func TestPairingEdgeCases(t *testing.T) {
-	_, round := runPairingAlgorithm(MembersMap{}, 0, newTestRand(1))
+	_, round := Run(MembersMap{}, 0, newTestRand(1))
 	if len(round.Pairs) != 0 {
 		t.Errorf("no members should yield no pairs")
 	}
 
-	_, round = runPairingAlgorithm(getMockMembersMap(t, 1), 0, newTestRand(1))
+	_, round = Run(getMockMembersMap(t, 1), 0, newTestRand(1))
 	if len(round.Pairs) != 0 {
 		t.Errorf("a single member should yield no pairs")
 	}
@@ -161,8 +161,33 @@ func TestPairingEdgeCases(t *testing.T) {
 	// a member whose history refers to someone who is no longer active
 	members := getMockMembersMap(t, 2)
 	members["a@gmail.com"].LastRoundWith["gone@gmail.com"] = -1
-	_, round = runPairingAlgorithm(members, 0, newTestRand(1))
+	_, round = Run(members, 0, newTestRand(1))
 	if len(round.Pairs) != 1 {
 		t.Errorf("expected the 2 active members to be paired, got %d pairs", len(round.Pairs))
+	}
+}
+
+func TestCloneIsDeep(t *testing.T) {
+	members := getMockMembersMap(t, 3)
+	clone := members.Clone()
+	clone.UpdateLastRoundWith("a@gmail.com", "b@gmail.com", 9)
+
+	if members["a@gmail.com"].LastRoundWith["b@gmail.com"] != -1 {
+		t.Error("modifying the clone changed the original")
+	}
+}
+
+func TestPairAndRoundStrings(t *testing.T) {
+	if p := NewPair("z", "a"); p.ID1 != "a" || p.ID2 != "z" {
+		t.Errorf("NewPair did not order ids: %+v", p)
+	}
+
+	round := NewRound(2)
+	round.AddPair("b", "a")
+	if !round.IsPaired("a") || !round.IsPaired("b") || round.IsPaired("c") {
+		t.Error("IsPaired mismatch")
+	}
+	if s := round.String(); !strings.Contains(s, "Round 2") || !strings.Contains(s, "a") {
+		t.Errorf("unexpected round string %q", s)
 	}
 }
