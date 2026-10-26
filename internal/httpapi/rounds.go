@@ -78,7 +78,7 @@ func (s *Server) rescheduleRound(w http.ResponseWriter, r *http.Request) {
 
 	roundID, err := strconv.Atoi(values[2])
 	if err != nil {
-		s.writeInternalError(w, err, function)
+		s.writeBadRequest(w, err, function)
 		return
 	}
 
@@ -102,7 +102,7 @@ func (s *Server) removeRound(w http.ResponseWriter, r *http.Request) {
 
 	roundID, err := strconv.Atoi(values[1])
 	if err != nil {
-		s.writeInternalError(w, err, function)
+		s.writeBadRequest(w, err, function)
 		return
 	}
 

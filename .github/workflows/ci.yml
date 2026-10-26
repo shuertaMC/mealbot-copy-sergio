@@ -14,6 +14,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # go.sum is not committed; it is produced here by `go mod tidy`.
+      - name: Tidy modules
+        run: go mod tidy
+
       - name: Download modules
         run: go mod download
 
@@ -22,6 +26,11 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Check dependency licenses
+        run: |
+          go install github.com/google/go-licenses@latest
+          "$(go env GOPATH)/bin/go-licenses" check ./... --allowed_licenses=MIT,BSD-2-Clause,BSD-3-Clause,Apache-2.0,ISC,MPL-2.0
 
       # Docker is available on ubuntu-latest, so the testcontainers-based
       # integration tests run for real; fail rather than skip if it is not.

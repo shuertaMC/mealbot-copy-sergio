@@ -52,13 +52,16 @@ All routes except `/healthz` and the static files require an Auth0 access token
 | `GET /rounds?org=` | Scheduled round dates |
 | `POST /round?org=&round=` | Schedule a round; add `roundId=` to reschedule it |
 | `DELETE /round?org=&roundId=` | Cancel a round |
+
+A non-numeric `roundId` is rejected with `400`.
 | `GET /pairs?org=` | Pairings of every round |
 
 ## Tests
 - `go test ./...` runs everything. The integration tests start Postgres with
   [testcontainers-go](https://golang.testcontainers.org/) and load `schema.sql`;
   they are skipped when Docker is not available (set `MEALBOT_REQUIRE_DOCKER=1` to fail instead).
-- CI runs `go vet ./...` and `go test -race ./...` (see `.github/workflows/ci.yml`).
+- CI runs `go mod tidy`, `go mod download`, `go build`, `go vet ./...`, a license check and `go test -race ./...` (see `.github/workflows/ci.yml`).
+- `scripts/check-licenses.sh` runs the same license check locally (go-licenses; allowed: MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, MPL-2.0).
 
 ## Layout
 - `cmd/mealbot`: entry point (serve, `pair`, `migrate`)
@@ -73,5 +76,5 @@ All routes except `/healthz` and the static files require an Auth0 access token
 - `schema.sql`: database schema; `static/`: static files; `testdata/`: sample CSVs
 
 # Miscellanea
-- Package management is handled w/ Go Modules (https://go.dev/blog/using-go-modules)
+- Package management is handled w/ Go Modules (https://go.dev/blog/using-go-modules). `go.sum` is not committed; it is produced by `go mod tidy`.
 - Deployed on Heroku: see `Procfile`

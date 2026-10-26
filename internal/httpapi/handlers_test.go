@@ -85,7 +85,7 @@ func TestRouteValidationResponses(t *testing.T) {
 		{"round reschedule without org", "POST", "/round?roundId=1", "", 400, missingOrgs},
 		{"round delete without params", "DELETE", "/round", "", 400, missingOrgs},
 		{"round delete without id", "DELETE", "/round?org=ysc", "", 400, `{"Message":"Request query parameters does not contain roundId"}`},
-		{"round delete with bad id", "DELETE", "/round?org=ysc&roundId=abc", "", 500, `{"Message":"strconv.Atoi: parsing \"abc\": invalid syntax"}`},
+		{"round delete with bad id", "DELETE", "/round?org=ysc&roundId=abc", "", 400, `{"Message":"strconv.Atoi: parsing \"abc\": invalid syntax"}`},
 		{"pairs post", "POST", "/pairs", "", 405, onlyGET},
 		{"pairs without org", "GET", "/pairs", "", 400, missingOrg},
 	}
