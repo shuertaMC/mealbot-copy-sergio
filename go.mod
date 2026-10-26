@@ -3,8 +3,9 @@ module github.com/johnamadeo/mealbot
 go 1.24
 
 require (
-	github.com/dgrijalva/jwt-go v3.2.0+incompatible
-	github.com/lib/pq v1.10.9
-	github.com/mailgun/mailgun-go v2.0.0+incompatible
-	github.com/sirupsen/logrus v1.9.3
+	github.com/golang-jwt/jwt/v5 v5.2.2
+	github.com/jackc/pgx/v5 v5.7.5
+	github.com/mailgun/mailgun-go/v4 v4.12.0
+	github.com/testcontainers/testcontainers-go v0.37.0
+	github.com/testcontainers/testcontainers-go/modules/postgres v0.37.0
 )
