@@ -10,5 +10,5 @@ ALLOWED="MIT,BSD-2-Clause,BSD-3-Clause,Apache-2.0,ISC,MPL-2.0"
 
 go mod tidy
 go mod download
-go install github.com/google/go-licenses@latest
+go install github.com/google/go-licenses@v1.6.0
 "$(go env GOPATH)/bin/go-licenses" check ./... --allowed_licenses="$ALLOWED"
