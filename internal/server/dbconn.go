@@ -3,8 +3,10 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	// Registers the "pgx" database/sql driver.
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -31,4 +33,11 @@ func CreateDBConnection(databaseURL string) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+// Ping verifies the database is reachable, giving up after timeout.
+func Ping(ctx context.Context, db *sql.DB, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return db.PingContext(ctx)
 }
