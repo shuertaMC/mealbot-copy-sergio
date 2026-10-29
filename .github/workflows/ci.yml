@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check modules are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Check dependency licenses
+        run: |
+          go install github.com/google/go-licenses@v1.6.0
+          "$(go env GOPATH)/bin/go-licenses" check ./... --allowed_licenses=MIT,BSD-2-Clause,BSD-3-Clause,Apache-2.0,ISC,MPL-2.0
+
+      # Docker is available on ubuntu-latest, so the testcontainers-based
+      # integration tests run for real; fail rather than skip if it is not.
+      - name: Test
+        run: go test -race ./...
+        env:
+          MEALBOT_REQUIRE_DOCKER: "1"

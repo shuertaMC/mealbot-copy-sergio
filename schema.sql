@@ -1,7 +1,7 @@
-DROP TABLE pairs;
-DROP TABLE rounds;
-DROP TABLE members;
-DROP TABLE organizations;
+DROP TABLE IF EXISTS pairs;
+DROP TABLE IF EXISTS rounds;
+DROP TABLE IF EXISTS members;
+DROP TABLE IF EXISTS organizations;
 
 CREATE TABLE organizations (
     name VARCHAR PRIMARY KEY,
@@ -14,7 +14,7 @@ CREATE TABLE members (
     email VARCHAR NOT NULL CHECK(length(email) > 0),
     name VARCHAR NOT NULL CHECK(length(name) > 0),
     metadata JSONB,
-    pair_counts JSONB NOT NULL,
+    last_round_with JSONB NOT NULL,
     active BOOLEAN NOT NULL,
     PRIMARY KEY (organization, email)
 );

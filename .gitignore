@@ -1,0 +1,23 @@
+# Go build output
+/mealbot
+/bin/
+*.exe
+*.test
+*.out
+coverage.txt
+
+# Python tooling
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+
+# Editor / OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Local configuration
+.env
