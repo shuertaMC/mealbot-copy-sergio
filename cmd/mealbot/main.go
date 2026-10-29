@@ -71,9 +71,7 @@ func openDB(ctx context.Context, cfg config.Config, logger *slog.Logger) (*sql.D
 		return nil, err
 	}
 
-	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if err := db.PingContext(pingCtx); err != nil {
+	if err := server.Ping(ctx, db, 10*time.Second); err != nil {
 		logger.Warn("database is not reachable yet", "error", err)
 	}
 
