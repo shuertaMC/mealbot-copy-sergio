@@ -90,7 +90,9 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 // versionHandler returns the application version as JSON.
 func (s *Server) versionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"version":"` + config.Version + `"}`))
+	s.writeJSON(w, struct {
+		Version string `json:"version"`
+	}{config.Version}, "versionHandler")
 }
 
 // methodNotAllowed answers requests whose method the route does not support.
