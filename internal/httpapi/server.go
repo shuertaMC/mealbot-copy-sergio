@@ -71,6 +71,9 @@ func (s *Server) Routes(mw Middleware) http.Handler {
 	route("/pairs", []string{"GET"}, map[string]http.HandlerFunc{
 		"GET": s.getPairs,
 	})
+	route("/version", []string{"GET"}, map[string]http.HandlerFunc{
+		"GET": s.versionHandler,
+	})
 
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.Handle("/", http.FileServer(http.Dir(s.Config.StaticDir)))
@@ -82,6 +85,14 @@ func (s *Server) Routes(mw Middleware) http.Handler {
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Write([]byte("ok"))
+}
+
+// versionHandler returns the application version as JSON.
+func (s *Server) versionHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	s.writeJSON(w, struct {
+		Version string `json:"version"`
+	}{config.Version}, "versionHandler")
 }
 
 // methodNotAllowed answers requests whose method the route does not support.
