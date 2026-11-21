@@ -88,16 +88,17 @@ func (h *Handler) GetRounds(w http.ResponseWriter, r *http.Request) {
 
 // Round : Combined HTTP handler for rounds
 func (h *Handler) Round(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
+	switch r.Method {
+	case "POST":
 		_, err := getQueryParam(r, "roundId")
 		if err != nil {
 			h.AddRound(w, r)
 		} else {
 			h.RescheduleRound(w, r)
 		}
-	} else if r.Method == "DELETE" {
+	case "DELETE":
 		h.RemoveRound(w, r)
-	} else {
+	default:
 		LogAndWriteErr(
 			w,
 			errors.New("Only POST and DELETE requests are allowed at this route"),

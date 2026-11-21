@@ -31,7 +31,7 @@ func (f failingQuerier) Query(ctx context.Context, sql string, args ...any) (pgx
 }
 
 func (f failingQuerier) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	return failingRow{f.err}
+	return failingRow(f)
 }
 
 func newTestHandler(err error) *Handler {

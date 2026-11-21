@@ -52,9 +52,10 @@ func extractTraits(members []store.MemberResponse) []string {
 
 // Members : Combined handlers for create and retrieving members
 func (h *Handler) Members(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
+	switch r.Method {
+	case "POST":
 		h.CreateMembers(w, r)
-	} else if r.Method == "GET" {
+	case "GET":
 		h.GetMembers(w, r)
 	}
 }
@@ -220,11 +221,12 @@ func ParseMembersCSV(orgname string, in io.Reader) ([]store.Member, error) {
 		email := ""
 		metadata := map[string]string{}
 		for i, val := range row {
-			if headers[i] == "name" {
+			switch headers[i] {
+			case "name":
 				name = strings.Trim(val, " ")
-			} else if headers[i] == "email" {
+			case "email":
 				email = strings.Trim(val, " ")
-			} else {
+			default:
 				metadata[headers[i]] = val
 			}
 		}
