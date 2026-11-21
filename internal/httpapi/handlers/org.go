@@ -33,18 +33,13 @@ func (h *Handler) GetOrganizations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queries, ok := r.URL.Query()["admin"]
-	if !ok || len(queries) > 1 {
-		LogAndWriteErr(
-			w,
-			errors.New("request query parameters must contain 'admin'"),
-			http.StatusBadRequest,
-			function,
-		)
+	admin, err := getQueryParam(r, "admin")
+	if err != nil {
+		LogAndWriteStatusBadRequest(w, err, function)
 		return
 	}
 
-	organizations, err := h.Store.GetOrganizations(r.Context(), queries[0])
+	organizations, err := h.Store.GetOrganizations(r.Context(), admin)
 	if err != nil {
 		LogAndWriteStatusInternalServerError(w, err, function)
 		return
@@ -87,17 +82,11 @@ func (h *Handler) CreateOrganization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	queries, ok := r.URL.Query()["admin"]
-	if !ok || len(queries) > 1 {
-		LogAndWriteErr(
-			w,
-			errors.New("request query parameters must contain 'admin'"),
-			http.StatusBadRequest,
-			function,
-		)
+	admin, err := getQueryParam(r, "admin")
+	if err != nil {
+		LogAndWriteStatusBadRequest(w, err, function)
 		return
 	}
-	admin := queries[0]
 
 	slog.Debug("creating organization", "org", body.Organization, "admin", admin)
 
