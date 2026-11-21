@@ -37,6 +37,19 @@ type GetMembersResponse struct {
 	CrossMatchTrait string                 `json:"crossMatchTrait"`
 }
 
+// extractTraits : Returns the trait names (every key except name/email) of the first member
+func extractTraits(members []store.MemberResponse) []string {
+	traits := []string{}
+	if len(members) > 0 {
+		for trait := range members[0] {
+			if trait != "name" && trait != "email" {
+				traits = append(traits, trait)
+			}
+		}
+	}
+	return traits
+}
+
 // Members : Combined handlers for create and retrieving members
 func (h *Handler) Members(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
@@ -71,14 +84,7 @@ func (h *Handler) GetMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	traits := []string{}
-	if len(members) > 0 {
-		for trait := range members[0] {
-			if trait != "name" && trait != "email" {
-				traits = append(traits, trait)
-			}
-		}
-	}
+	traits := extractTraits(members)
 
 	crossMatchTrait, err := h.Store.GetCrossMatchTrait(r.Context(), orgname)
 	if err != nil {
@@ -157,14 +163,7 @@ func (h *Handler) CreateMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var traits []string
-	if len(members) > 0 {
-		for trait := range members[0] {
-			if trait != "name" && trait != "email" {
-				traits = append(traits, trait)
-			}
-		}
-	}
+	traits := extractTraits(members)
 
 	resp := CreateMembersResponse{
 		Members: members,
