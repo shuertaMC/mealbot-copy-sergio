@@ -152,8 +152,12 @@ func (h *Handler) RemoveRound(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RescheduleRound(w http.ResponseWriter, r *http.Request) {
 	function := "RescheduleRoundHandler"
 	if r.Method != "POST" {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		w.Write(db.StrToBytes("Only POST requests are allowed at this route"))
+		LogAndWriteErr(
+			w,
+			errors.New("Only POST requests are allowed at this route"),
+			http.StatusMethodNotAllowed,
+			function,
+		)
 		return
 	}
 

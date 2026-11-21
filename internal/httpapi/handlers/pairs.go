@@ -48,6 +48,5 @@ func (h *Handler) GetPairs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	w.Write(bytes)
+	LogAndWrite(w, bytes, http.StatusOK, function)
 }

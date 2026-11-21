@@ -134,8 +134,7 @@ func (h *Handler) CrossMatchTrait(w http.ResponseWriter, r *http.Request) {
 
 	err = h.Store.SetCrossMatchTrait(r.Context(), orgname, body.Trait)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write(db.ErrToBytes(err))
+		LogAndWriteStatusInternalServerError(w, err, function)
 		return
 	}
 
