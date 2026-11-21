@@ -77,3 +77,13 @@ func (j JSONB) IsNull() bool {
 func (j JSONB) Equals(j1 JSONB) bool {
 	return bytes.Equal([]byte(j), []byte(j1))
 }
+
+// Arg returns the value to use as a query argument for a jsonb column: nil
+// (SQL NULL) for an empty/null value, otherwise the JSON text. This matches
+// the behavior of the old driver.Valuer implementation.
+func (j JSONB) Arg() any {
+	if j.IsNull() {
+		return nil
+	}
+	return string(j)
+}

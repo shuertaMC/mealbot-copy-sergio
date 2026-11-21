@@ -1,4 +1,4 @@
-package main
+package handlers
 
 import (
 	"net/http"
@@ -7,12 +7,10 @@ import (
 const (
 	// AccessControlAllowHeaders : https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Headers
 	AccessControlAllowHeaders = "Authorization, Content-Type, Origin, Accept, token"
-	// AccessControlAllowOrigin = "http://localhost:3000"
-	// AccessControlAllowOrigin  = "https://mealbot-web.herokuapp.com"
 )
 
-// GetCorsHandler : Create handler that sets up CORS policy https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS
-func GetCorsHandler(handler http.Handler) http.Handler {
+// Cors : Create handler that sets up CORS policy https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS
+func Cors(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		// TODO: Get rid of temporary AccessControlAllowOrigin debugging setup

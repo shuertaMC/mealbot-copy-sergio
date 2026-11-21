@@ -1,38 +1,23 @@
-package main
+package pairing
 
 import (
-	"encoding/json"
-	"fmt"
+	"context"
+	"log/slog"
 
-	"github.com/johnamadeo/server"
+	"github.com/johnamadeo/mealbot/internal/store"
 )
 
-func migrateToLastRoundWithForPairing() error {
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
+// MigrateToLastRoundWith rebuilds the 'last round with' data structure used by
+// the pairing algorithm from the stored pairs of every organization.
+func MigrateToLastRoundWith(ctx context.Context, st *store.Store) error {
+	organizations, err := st.GetAllOrganizations(ctx)
 	if err != nil {
 		return err
-	}
-
-	rows, err := db.Query("SELECT name FROM organizations")
-	if err != nil {
-		return err
-	}
-
-	organizations := []string{}
-	for rows.Next() {
-		var organization string
-		err := rows.Scan(&organization)
-		if err != nil {
-			return err
-		}
-
-		organizations = append(organizations, organization)
 	}
 
 	for _, org := range organizations {
-		membersMap := map[string]Member{}
-		members, err := GetMembersFromDB(org, true)
+		membersMap := map[string]store.Member{}
+		members, err := st.GetMembers(ctx, org, true)
 		if err != nil {
 			return err
 		}
@@ -42,7 +27,7 @@ func migrateToLastRoundWithForPairing() error {
 			membersMap[member.Email] = member
 		}
 
-		pairs, err := getPairsFromDB(org)
+		pairs, err := st.GetPairs(ctx, org)
 		if err != nil {
 			return err
 		}
@@ -70,24 +55,12 @@ func migrateToLastRoundWithForPairing() error {
 		}
 
 		for _, member := range membersMap {
-			bytes, err := json.Marshal(member.LastRoundWith)
-			if err != nil {
+			if err := st.UpdateLastRoundWith(ctx, org, member.Email, member.LastRoundWith); err != nil {
 				return err
 			}
-
-			_, err = db.Exec(
-				"UPDATE members SET last_round_with = $1 WHERE organization = $2 AND email = $3",
-				server.JSONB(bytes),
-				org,
-				member.Email,
-			)
-			if err != nil {
-				return err
-			}
-
 		}
 	}
 
-	fmt.Println("Done migrating to 'last round with' data structure in pairing algorithm!")
+	slog.Info("Done migrating to 'last round with' data structure in pairing algorithm!")
 	return nil
 }
