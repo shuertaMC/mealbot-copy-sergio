@@ -2,6 +2,10 @@ module github.com/johnamadeo/mealbot
 
 go 1.25
 
+// Heroku Go buildpack settings: build only the server binary (bin/mealbot).
+// +heroku goVersion go1.25
+// +heroku install ./cmd/mealbot
+
 // NOTE: only direct dependencies are listed. Run `go mod tidy` to add the
 // indirect requirements and regenerate go.sum (go.sum is intentionally empty).
 require (
