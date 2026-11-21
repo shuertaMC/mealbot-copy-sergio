@@ -1,0 +1,20 @@
+# Build output
+bin/
+/mealbot
+/mealbot.exe
+*.test
+*.out
+
+# Python (functional test tooling)
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+
+# Local configuration and secrets
+.env
+
+# OS files
+.DS_Store
