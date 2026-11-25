@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -161,6 +163,30 @@ func TestMigrationEntries(t *testing.T) {
 		if strings.TrimSpace(entry.sql) == "" {
 			t.Fatalf("entry %d has empty SQL", index)
 		}
+	}
+}
+
+func TestSchemaBootstrapIsFailFastAndTransactional(t *testing.T) {
+	t.Parallel()
+	schema, err := os.ReadFile(filepath.Join("..", "..", "..", "schema.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	markers := []string{
+		`\set ON_ERROR_STOP on`,
+		"BEGIN;",
+		`\ir migrations/001_initial_schema.sql`,
+		`\ir migrations/002_reconcile_legacy_schema.sql`,
+		`\ir migrations/003_constraints_and_indexes.sql`,
+		"COMMIT;",
+	}
+	position := -1
+	for _, marker := range markers {
+		next := strings.Index(string(schema), marker)
+		if next <= position {
+			t.Fatalf("schema bootstrap marker %q is missing or out of order", marker)
+		}
+		position = next
 	}
 }
 

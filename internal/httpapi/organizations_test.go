@@ -145,9 +145,10 @@ func TestCreateOrganizationHandlerContracts(t *testing.T) {
 		limit  int64
 		status int
 		want   string
+		allow  string
 	}{
 		{name: "success", method: http.MethodPost, url: "/org?admin=owner", body: `{"org":"alpha"}`, status: 201, want: organizationCreatedText},
-		{name: "method", method: http.MethodGet, url: "/org?admin=owner", status: 405, want: "{\"error\":\"method not allowed\"}\n"},
+		{name: "method", method: http.MethodGet, url: "/org?admin=owner", status: 405, want: "{\"error\":\"method not allowed\"}\n", allow: http.MethodPost},
 		{name: "missing admin", method: http.MethodPost, url: "/org", body: `{"org":"alpha"}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
 		{name: "repeated admin", method: http.MethodPost, url: "/org?admin=a&admin=b", body: `{"org":"alpha"}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
 		{name: "empty admin", method: http.MethodPost, url: "/org?admin=", body: `{"org":"alpha"}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
@@ -169,6 +170,9 @@ func TestCreateOrganizationHandlerContracts(t *testing.T) {
 				contentType = "text/plain; charset=utf-8"
 			}
 			assertHTTPResponse(t, response, test.status, test.want, contentType)
+			if got := response.Header().Get("Allow"); got != test.allow {
+				t.Fatalf("Allow = %q, want %q", got, test.allow)
+			}
 			if test.status == 201 && (service.createdName != "alpha" || service.admin != "owner") {
 				t.Fatalf("create input = %q, %q", service.createdName, service.admin)
 			}
