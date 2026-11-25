@@ -2,8 +2,6 @@ module github.com/johnamadeo/mealbot
 
 go 1.27.4
 
-toolchain go1.27.4
-
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.13.0
