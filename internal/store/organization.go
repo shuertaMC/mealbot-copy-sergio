@@ -5,13 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 )
 
-var (
-	ErrOrganizationNameRequired  = errors.New("organization name is required")
-	ErrOrganizationAdminRequired = errors.New("organization administrator is required")
-)
+var ErrOrganizationNameRequired = errors.New("organization name is required")
 
 // Organization is the persistence representation of an organization. A nil
 // CrossMatchTrait represents SQL NULL rather than an empty configured trait.
@@ -23,11 +19,8 @@ type Organization struct {
 
 // CreateOrganization validates and inserts an organization.
 func (s *Store) CreateOrganization(ctx context.Context, name, admin string) error {
-	if strings.TrimSpace(name) == "" {
+	if name == "" {
 		return ErrOrganizationNameRequired
-	}
-	if strings.TrimSpace(admin) == "" {
-		return ErrOrganizationAdminRequired
 	}
 	if s == nil || s.db == nil {
 		return ErrNilDatabase

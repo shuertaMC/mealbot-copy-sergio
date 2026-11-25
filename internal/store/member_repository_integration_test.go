@@ -26,8 +26,18 @@ func TestOrganizationAndMemberRepositoriesPostgreSQL(t *testing.T) {
 		if err := store.CreateOrganization(ctx, "", "admin@example.com"); !errors.Is(err, ErrOrganizationNameRequired) {
 			t.Fatalf("empty organization error = %v", err)
 		}
-		if err := store.CreateOrganization(ctx, "invalid", ""); !errors.Is(err, ErrOrganizationAdminRequired) {
-			t.Fatalf("empty administrator error = %v", err)
+		if err := store.CreateOrganization(ctx, "invalid", ""); err == nil {
+			t.Fatal("empty administrator succeeded, want database constraint error")
+		}
+		if err := store.CreateOrganization(ctx, " \t", " \t"); err != nil {
+			t.Fatalf("create whitespace-only organization: %v", err)
+		}
+		whitespaceOrganizations, err := store.OrganizationsByAdmin(ctx, " \t")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{" \t"}; !reflect.DeepEqual(whitespaceOrganizations, want) {
+			t.Fatalf("whitespace organizations = %q, want %q", whitespaceOrganizations, want)
 		}
 		for _, organization := range []Organization{
 			{Name: "members", Admin: "admin@example.com"},

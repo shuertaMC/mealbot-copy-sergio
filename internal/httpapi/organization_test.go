@@ -62,6 +62,10 @@ func TestOrganizationHandlersPreserveSuccessContracts(t *testing.T) {
 	if store.createName != "alpha" || store.createAdmin != "owner" {
 		t.Fatalf("create arguments = (%q, %q)", store.createName, store.createAdmin)
 	}
+	assertHandlerResponse(t, handlers.Create, http.MethodPost, "/org?admin=%20%09", `{"org":" "}`, http.StatusOK, `{"Message":"Successfully created new organization"}`)
+	if store.createName != " " || store.createAdmin != " \t" {
+		t.Fatalf("whitespace create arguments = (%q, %q)", store.createName, store.createAdmin)
+	}
 	assertHandlerResponse(t, handlers.CrossMatchTrait, http.MethodPost, "/crossmatchtrait?org=alpha", `{"trait":"cohort"}`, http.StatusOK, `{"Message":"Successfully set the cross match trait"}`)
 	if store.setOrg != "alpha" || store.setTrait == nil || *store.setTrait != trait {
 		t.Fatalf("set trait arguments = (%q, %v)", store.setOrg, store.setTrait)
