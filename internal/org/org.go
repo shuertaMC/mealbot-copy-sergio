@@ -54,18 +54,13 @@ func (h *Handler) GetOrganizationsHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	queries, ok := r.URL.Query()["admin"]
-	if !ok || len(queries) > 1 {
-		httputil.LogAndWriteErr(
-			w,
-			errors.New("request query parameters must contain 'admin'"),
-			http.StatusBadRequest,
-			function,
-		)
+	admin, err := httputil.GetQueryParam(r, "admin")
+	if err != nil {
+		httputil.LogAndWriteStatusBadRequest(w, err, function)
 		return
 	}
 
-	organizations, err := GetOrganizations(h.DB, queries[0])
+	organizations, err := GetOrganizations(h.DB, admin)
 	if err != nil {
 		httputil.LogAndWriteStatusInternalServerError(w, err, function)
 		return
@@ -108,17 +103,11 @@ func (h *Handler) CreateOrganizationHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	queries, ok := r.URL.Query()["admin"]
-	if !ok || len(queries) > 1 {
-		httputil.LogAndWriteErr(
-			w,
-			errors.New("request query parameters must contain 'admin'"),
-			http.StatusBadRequest,
-			function,
-		)
+	admin, err := httputil.GetQueryParam(r, "admin")
+	if err != nil {
+		httputil.LogAndWriteStatusBadRequest(w, err, function)
 		return
 	}
-	admin := queries[0]
 
 	fmt.Println(body.Organization, admin)
 
@@ -176,32 +165,17 @@ func (h *Handler) CrossMatchTraitHandler(w http.ResponseWriter, r *http.Request)
 
 // GetOrganizations : names of the organizations managed by admin
 func GetOrganizations(q db.Querier, admin string) ([]string, error) {
-	rows, err := q.Query(
-		"SELECT name FROM organizations WHERE admin = $1",
-		admin,
-	)
-	if err != nil {
-		return []string{}, err
-	}
-	defer rows.Close()
-
-	organizations := []string{}
-	for rows.Next() {
-		var organization string
-		err := rows.Scan(&organization)
-		if err != nil {
-			return []string{}, err
-		}
-
-		organizations = append(organizations, organization)
-	}
-
-	return organizations, nil
+	return queryOrgNames(q, "SELECT name FROM organizations WHERE admin = $1", admin)
 }
 
 // GetAllOrganizations : names of every organization
 func GetAllOrganizations(q db.Querier) ([]string, error) {
-	rows, err := q.Query("SELECT name FROM organizations")
+	return queryOrgNames(q, "SELECT name FROM organizations")
+}
+
+// queryOrgNames runs a query returning a single organization name column.
+func queryOrgNames(q db.Querier, query string, args ...any) ([]string, error) {
+	rows, err := q.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -210,8 +184,7 @@ func GetAllOrganizations(q db.Querier) ([]string, error) {
 	organizations := []string{}
 	for rows.Next() {
 		var organization string
-		err := rows.Scan(&organization)
-		if err != nil {
+		if err := rows.Scan(&organization); err != nil {
 			return nil, err
 		}
 
