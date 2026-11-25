@@ -76,7 +76,8 @@ ORDER BY name
 }
 
 // CrossMatchTrait reads a nullable organization trait. A nil result means the
-// database value is SQL NULL; an empty non-nil string remains distinguishable.
+// database value is SQL NULL or the organization does not exist; an empty
+// non-nil string remains distinguishable.
 func (s *Store) CrossMatchTrait(ctx context.Context, organization string) (*string, error) {
 	if s == nil || s.db == nil {
 		return nil, ErrNilDatabase
@@ -88,6 +89,9 @@ func (s *Store) CrossMatchTrait(ctx context.Context, organization string) (*stri
 		`SELECT cross_match_trait FROM organizations WHERE name = $1`,
 		organization,
 	).Scan(&trait); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("read cross-match trait: %w", err)
 	}
 	if !trait.Valid {

@@ -64,6 +64,10 @@ func TestOrganizationAndMemberRepositoriesPostgreSQL(t *testing.T) {
 		if err != nil || trait != nil {
 			t.Fatalf("cleared trait = %v, error = %v, want nil", trait, err)
 		}
+		trait, err = store.CrossMatchTrait(ctx, "missing")
+		if err != nil || trait != nil {
+			t.Fatalf("missing organization trait = %v, error = %v, want nil", trait, err)
+		}
 
 		initialCSV := strings.NewReader("NAME,Email,Cohort,Note\n Alice ,alice@example.com,blue,\"unicode ✓ and comma, retained\"\nBob,bob@example.com,red,plain\n")
 		if _, err := store.SynchronizeMembersCSV(ctx, "members", initialCSV); err != nil {

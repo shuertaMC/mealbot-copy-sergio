@@ -89,7 +89,7 @@ func TestMemberGetSuccessEmptyAndOptionalTrait(t *testing.T) {
 
 	members.members = nil
 	traits.trait = nil
-	assertHandlerResponse(t, handlers.Get, http.MethodGet, "/members?org=empty", "", http.StatusOK, `{"members":[],"traits":[]}`)
+	assertHandlerResponse(t, handlers.Get, http.MethodGet, "/members?org=empty", "", http.StatusOK, `{"members":[],"traits":[],"crossMatchTrait":""}`)
 
 	emptyTrait := ""
 	traits.trait = &emptyTrait

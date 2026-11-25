@@ -451,9 +451,14 @@ class TestOrganizationAndMembers:
             "cara@example.test",
         }
         assert body["traits"] == ["college", "year"]
-        assert "crossMatchTrait" not in body
+        assert body["crossMatchTrait"] == ""
         alice = next(member for member in body["members"] if member["email"] == "alice@example.test")
         assert alice == {"name": "Alice Updated", "email": "alice@example.test", "college": "East", "year": "2030"}
+
+        missing_org = f"ftrun_missing_{uuid.uuid4().hex[:8]}"
+        missing = api.get(f"{BASE_URL}/members", params={"org": missing_org}, timeout=10)
+        assert missing.status_code == 200
+        assert missing.json() == {"members": [], "traits": [], "crossMatchTrait": ""}
 
     def test_invalid_csv_rolls_back_entire_sync(self, api, org_factory):
         org = org_factory("csvrollback")

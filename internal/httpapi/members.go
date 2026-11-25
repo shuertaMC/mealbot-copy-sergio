@@ -17,9 +17,9 @@ const maxMultipartMemory = 32 << 20
 // member identity fields.
 type MemberResponse map[string]string
 
-// MembersResponse is shared by GET and POST. CrossMatchTrait is omitted only
-// when the database value is SQL NULL; an explicitly configured empty string
-// remains representable.
+// MembersResponse is shared by GET and POST. GET normalizes SQL NULL and a
+// missing organization to an empty string; the pointer keeps the GET-only
+// field omitted from POST responses.
 type MembersResponse struct {
 	Members         []MemberResponse `json:"members"`
 	Traits          []string         `json:"traits"`
@@ -98,6 +98,10 @@ func (h MemberHandlers) Get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.responder.WriteInternalServerError(w, err, function)
 		return
+	}
+	if crossMatchTrait == nil {
+		emptyTrait := ""
+		crossMatchTrait = &emptyTrait
 	}
 	encoded, err := json.Marshal(MembersResponse{
 		Members:         responseMembers,
