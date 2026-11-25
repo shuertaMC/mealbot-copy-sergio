@@ -167,7 +167,10 @@ func TestRunPairingRoundSendsMailBeforeSave(t *testing.T) {
 	}
 	round := NewRound(3)
 	round.AddPair("a@gmail.com", "b@gmail.com")
-	getMinimalMembersForRound = func(orgname string) (MembersMap, error) { events = append(events, "load:"+orgname); return members, nil }
+	getMinimalMembersForRound = func(orgname string) (MembersMap, error) {
+		events = append(events, "load:"+orgname)
+		return members, nil
+	}
 	runPairingAlgorithmForRound = func(got MembersMap, roundNumber int, random RandomIntGenerator) (MembersMap, Round) {
 		events = append(events, "pair")
 		if roundNumber != 3 || len(got) != 2 || random == nil {

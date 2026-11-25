@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/johnamadeo/mealbot/internal/httpapi"
-	"github.com/johnamadeo/server"
 )
 
 // Organization :
@@ -70,11 +69,11 @@ func CrossMatchTraitHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetOrganizations :
 func getOrganizations(admin string) ([]string, error) {
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
+	db, err := openLegacyDatabase()
 	if err != nil {
 		return []string{}, err
 	}
+	defer db.Close()
 
 	rows, err := db.Query(
 		"SELECT name FROM organizations WHERE admin = $1",
@@ -103,11 +102,11 @@ func createOrganization(name string, admin string) error {
 		return errors.New("Organization name cannot be an empty string")
 	}
 
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
+	db, err := openLegacyDatabase()
 	if err != nil {
 		return err
 	}
+	defer db.Close()
 
 	_, err = db.Exec(
 		"INSERT INTO organizations (name, admin) VALUES ($1, $2)",
@@ -123,11 +122,11 @@ func createOrganization(name string, admin string) error {
 
 // GetCrossMatchTrait : Placeholder
 func GetCrossMatchTrait(orgname string) (string, error) {
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
+	db, err := openLegacyDatabase()
 	if err != nil {
 		return "", err
 	}
+	defer db.Close()
 
 	rows, err := db.Query(
 		"SELECT cross_match_trait FROM organizations WHERE name = $1",
@@ -155,11 +154,11 @@ func GetCrossMatchTrait(orgname string) (string, error) {
 }
 
 func setCrossMatchTrait(orgname string, crossMatchTrait string) error {
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
+	db, err := openLegacyDatabase()
 	if err != nil {
 		return err
 	}
+	defer db.Close()
 
 	_, err = db.Exec(
 		"UPDATE organizations SET cross_match_trait = $1 WHERE name = $2",

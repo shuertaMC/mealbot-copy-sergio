@@ -25,9 +25,10 @@ are those selected for the Go 1.27.4/PostgreSQL 19 delivery; `go.mod` and
 | `golang.org/x/vuln` (`govulncheck`) | 1.1.4 | CI-only vulnerability scanner | BSD 3-Clause |
 
 Test-only modules are not shipped as part of the service. The obsolete
-`vendor/` and `Godeps/` snapshots are intentionally still present until the
-clean module-cache delivery proof succeeds; their contents are not the target
-runtime dependency set above.
+`vendor/` and `Godeps/` snapshots were removed after the clean module-cache
+download, verification, test, and build proof succeeded. Their former contents
+remain recoverable from Git history and are not part of the runtime dependency
+set above.
 
 ## Copyright and license references
 

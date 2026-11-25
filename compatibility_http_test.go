@@ -105,52 +105,52 @@ func TestLegacyRouteMethodContracts(t *testing.T) {
 		want   responseExpectation
 	}{
 		{
-			name: "get members",
+			name:   "get members",
 			method: "GET", target: "/members?org=alpha",
 			want: responseExpectation{http.StatusOK, `{"members":[{"cohort":"2024","email":"alice@example.com","name":"Alice"}],"traits":["cohort"],"crossMatchTrait":"cohort"}`, "text/plain; charset=utf-8"},
 		},
 		{
-			name: "members silently ignores unsupported method",
+			name:   "members silently ignores unsupported method",
 			method: "DELETE", target: "/members?org=alpha",
 			want: responseExpectation{http.StatusOK, "", ""},
 		},
 		{
-			name: "list organizations",
+			name:   "list organizations",
 			method: "GET", target: "/orgs?admin=owner@example.com",
 			want: responseExpectation{http.StatusOK, `{"orgs":["alpha","beta"]}`, "text/plain; charset=utf-8"},
 		},
 		{
-			name: "create organization returns implicit 200",
+			name:   "create organization returns implicit 200",
 			method: "POST", target: "/org?admin=owner@example.com", body: `{"org":"alpha"}`,
 			want: responseExpectation{http.StatusOK, `{"Message":"Successfully created new organization"}`, "text/plain; charset=utf-8"},
 		},
 		{
-			name: "set trait returns implicit 200",
+			name:   "set trait returns implicit 200",
 			method: "POST", target: "/crossmatchtrait?org=alpha", body: `{"trait":"cohort"}`,
 			want: responseExpectation{http.StatusOK, `{"Message":"Successfully set the cross match trait"}`, "text/plain; charset=utf-8"},
 		},
 		{
-			name: "get rounds",
+			name:   "get rounds",
 			method: "GET", target: "/rounds?org=alpha",
 			want: responseExpectation{http.StatusOK, `{"rounds":["2020-01-02 03:04:05Z"]}`, "text/plain; charset=utf-8"},
 		},
 		{
-			name: "add round returns implicit 200",
+			name:   "add round returns implicit 200",
 			method: "POST", target: "/round?org=alpha&round=2020-01-02T03%3A04%3A05Z",
 			want: responseExpectation{http.StatusOK, `{"Message":"Successfully scheduled a new round"}`, "text/plain; charset=utf-8"},
 		},
 		{
-			name: "reschedule round returns implicit 200 and typo",
+			name:   "reschedule round returns implicit 200 and typo",
 			method: "POST", target: "/round?org=alpha&round=2020-01-02T03%3A04%3A05Z&roundId=2",
 			want: responseExpectation{http.StatusOK, `{"Message":"Succesfully changed date of the round"}`, "text/plain; charset=utf-8"},
 		},
 		{
-			name: "remove round returns implicit 200",
+			name:   "remove round returns implicit 200",
 			method: "DELETE", target: "/round?org=alpha&roundId=2",
 			want: responseExpectation{http.StatusOK, `{"Message":"Successfully removed round"}`, "text/plain; charset=utf-8"},
 		},
 		{
-			name: "get empty pair history",
+			name:   "get empty pair history",
 			method: "GET", target: "/pairs?org=alpha",
 			want: responseExpectation{http.StatusOK, `{"roundPairs":[]}`, ""},
 		},

@@ -35,24 +35,24 @@ func TestLoadCapturesOverridesByValue(t *testing.T) {
 		"MAILGUN_DOMAIN":     "mail.example",
 		"MAILGUN_API_KEY":    "mail-key",
 		"MAILGUN_SMTP_LOGIN": "sender@mail.example",
-		TestModeEnvironment:   " TRUE ",
+		TestModeEnvironment:  " TRUE ",
 	}
 	getenv := func(name string) string { return environment[name] }
 
 	got := Load(getenv)
 	want := Config{
-		Port:                "9090",
-		DatabaseURL:         "postgres://db.example/mealbot",
-		AuthIssuer:          "https://issuer.example/",
-		AuthAudience:        "urn:mealbot:test",
-		AuthJWKSURL:         "https://issuer.example/keys",
-		ReflectCORSOrigin:   true,
-		CORSAllowedHeaders:  DefaultCORSAllowedHeaders,
-		CORSAllowedMethods:  DefaultCORSAllowedMethods,
-		MailgunDomain:       "mail.example",
-		MailgunAPIKey:       "mail-key",
-		MailgunSMTPLogin:    "sender@mail.example",
-		TestMode:            true,
+		Port:               "9090",
+		DatabaseURL:        "postgres://db.example/mealbot",
+		AuthIssuer:         "https://issuer.example/",
+		AuthAudience:       "urn:mealbot:test",
+		AuthJWKSURL:        "https://issuer.example/keys",
+		ReflectCORSOrigin:  true,
+		CORSAllowedHeaders: DefaultCORSAllowedHeaders,
+		CORSAllowedMethods: DefaultCORSAllowedMethods,
+		MailgunDomain:      "mail.example",
+		MailgunAPIKey:      "mail-key",
+		MailgunSMTPLogin:   "sender@mail.example",
+		TestMode:           true,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Load overrides = %#v, want %#v", got, want)

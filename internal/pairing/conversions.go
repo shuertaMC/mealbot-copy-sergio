@@ -34,7 +34,7 @@ type PairRecord struct {
 	ID1          string
 	ID2          string
 	ExtraID      string
-	Round         int
+	Round        int
 }
 
 // PairRecords converts a round to stable persistence rows.
@@ -60,7 +60,7 @@ func PairRecords(organization string, round Round) []PairRecord {
 			ID1:          pair.ID1,
 			ID2:          pair.ID2,
 			ExtraID:      pair.ExtraID,
-			Round:         round.Number,
+			Round:        round.Number,
 		})
 	}
 	return records

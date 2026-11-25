@@ -27,18 +27,18 @@ const (
 // Config is the immutable-by-convention startup snapshot passed to service
 // components. Secrets are values only; this package never logs them.
 type Config struct {
-	Port                string
-	DatabaseURL         string
-	AuthIssuer          string
-	AuthAudience        string
-	AuthJWKSURL         string
-	ReflectCORSOrigin   bool
-	CORSAllowedHeaders  string
-	CORSAllowedMethods  string
-	MailgunDomain       string
-	MailgunAPIKey       string
-	MailgunSMTPLogin    string
-	TestMode            bool
+	Port               string
+	DatabaseURL        string
+	AuthIssuer         string
+	AuthAudience       string
+	AuthJWKSURL        string
+	ReflectCORSOrigin  bool
+	CORSAllowedHeaders string
+	CORSAllowedMethods string
+	MailgunDomain      string
+	MailgunAPIKey      string
+	MailgunSMTPLogin   string
+	TestMode           bool
 }
 
 // Load captures supported environment variables and applies rollout-compatible

@@ -74,7 +74,7 @@ func TestServiceStopsAtFirstMailErrorWithoutSave(t *testing.T) {
 			mailCalls++
 			return mailErr
 		}),
-		Store: storeFunc(func(context.Context, string, Round, MembersMap) error { saveCalls++; return nil }),
+		Store:  storeFunc(func(context.Context, string, Round, MembersMap) error { saveCalls++; return nil }),
 		Random: RandomFunc(func(int) int { return 0 }),
 	}
 	err := service.ProcessRound(context.Background(), ScheduledRound{Organization: "org", Number: 1})
@@ -87,7 +87,7 @@ func TestServiceTestModeSkipsMailAndSavesEmptyRound(t *testing.T) {
 	mailCalls := 0
 	saveCalls := 0
 	service := Service{
-		Members: loaderFunc(func(context.Context, string) (MembersMap, error) { return MembersMap{}, nil }),
+		Members:  loaderFunc(func(context.Context, string) (MembersMap, error) { return MembersMap{}, nil }),
 		Notifier: notifierFunc(func(context.Context, string, []string, []string) error { mailCalls++; return nil }),
 		Store: storeFunc(func(_ context.Context, _ string, round Round, members MembersMap) error {
 			saveCalls++

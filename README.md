@@ -128,6 +128,10 @@ the opted-in integration suite, the race detector, `govulncheck`, a clean
 module-cache download, and one shared `mealbot` binary in web, `pair`, and
 `migrate` modes.
 
+Dependencies resolve directly from the minimal Go module graph. The obsolete
+`Godeps/` manifest and checked-in `vendor/` snapshot have been removed, so no
+`GOFLAGS=-mod=mod` workaround is required.
+
 ## Deployment
 
 The deployment contract remains one executable named `mealbot`. The exact

@@ -15,9 +15,9 @@ const (
 	defaultMaxOpenConnections = 16
 	defaultMaxIdleConnections = 4
 	defaultConnectionLifetime = 30 * time.Minute
-	defaultConnectionIdleTime  = 5 * time.Minute
-	defaultPingTimeout         = 5 * time.Second
-	defaultOperationTimeout    = 10 * time.Second
+	defaultConnectionIdleTime = 5 * time.Minute
+	defaultPingTimeout        = 5 * time.Second
+	defaultOperationTimeout   = 10 * time.Second
 )
 
 var (
@@ -31,8 +31,8 @@ type ConnectionOptions struct {
 	MaxOpenConnections int
 	MaxIdleConnections int
 	ConnectionLifetime time.Duration
-	ConnectionIdleTime  time.Duration
-	PingTimeout         time.Duration
+	ConnectionIdleTime time.Duration
+	PingTimeout        time.Duration
 }
 
 // DefaultConnectionOptions returns the production pool defaults.
@@ -41,8 +41,8 @@ func DefaultConnectionOptions() ConnectionOptions {
 		MaxOpenConnections: defaultMaxOpenConnections,
 		MaxIdleConnections: defaultMaxIdleConnections,
 		ConnectionLifetime: defaultConnectionLifetime,
-		ConnectionIdleTime:  defaultConnectionIdleTime,
-		PingTimeout:         defaultPingTimeout,
+		ConnectionIdleTime: defaultConnectionIdleTime,
+		PingTimeout:        defaultPingTimeout,
 	}
 }
 

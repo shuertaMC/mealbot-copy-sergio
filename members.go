@@ -15,7 +15,6 @@ import (
 
 	"github.com/johnamadeo/mealbot/internal/httpapi"
 	internalstore "github.com/johnamadeo/mealbot/internal/store"
-	"github.com/johnamadeo/server"
 )
 
 const (
@@ -250,11 +249,11 @@ func createMembersFromCSV(orgname string, filename string) ([]MemberResponse, er
 // TODO: Use transactions!!! Current implementation is brittle since it does
 // rollback if insertion of multiple members fails halfway
 func saveMembersInDB(orgname string, newMembers []Member) error {
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
+	db, err := openLegacyDatabase()
 	if err != nil {
 		return err
 	}
+	defer db.Close()
 
 	newMembersMap := map[string]Member{}
 	for _, member := range newMembers {
@@ -354,8 +353,8 @@ func saveMembersInDB(orgname string, newMembers []Member) error {
 				member.Organization,
 				member.Email,
 				member.Name,
-				server.JSONB(metadataBytes),
-				server.JSONB(lastRoundWithBytes),
+				string(metadataBytes),
+				string(lastRoundWithBytes),
 				true,
 			)
 
@@ -367,8 +366,8 @@ func saveMembersInDB(orgname string, newMembers []Member) error {
 			_, err = db.Exec(
 				"UPDATE members SET name = $1, metadata = $2, last_round_with = $3, active = $4 WHERE organization = $5 AND email = $6",
 				member.Name,
-				server.JSONB(metadataBytes),
-				server.JSONB(lastRoundWithBytes),
+				string(metadataBytes),
+				string(lastRoundWithBytes),
 				true,
 				orgname,
 				member.Email,
@@ -427,11 +426,11 @@ func getActiveMembersFromDBInPairFormat(orgname string) ([]Member, error) {
 
 // GetMembersFromDB : Placeholder
 func GetMembersFromDB(orgname string, onlyActive bool) ([]Member, error) {
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
+	db, err := openLegacyDatabase()
 	if err != nil {
 		return []Member{}, err
 	}
+	defer db.Close()
 
 	members := []Member{}
 
@@ -445,7 +444,7 @@ func GetMembersFromDB(orgname string, onlyActive bool) ([]Member, error) {
 
 	for rows.Next() {
 		var organization, name, email string
-		var metadataJSON, lastRoundWithJSON server.JSONB
+		var metadataJSON, lastRoundWithJSON []byte
 		var active bool
 		err := rows.Scan(&organization, &name, &email, &metadataJSON, &lastRoundWithJSON, &active)
 		if err != nil {
@@ -456,24 +455,14 @@ func GetMembersFromDB(orgname string, onlyActive bool) ([]Member, error) {
 			continue
 		}
 
-		bytes, err := metadataJSON.MarshalJSON()
-		if err != nil {
-			return members, err
-		}
-
 		var metadata map[string]string
-		err = json.Unmarshal(bytes, &metadata)
-		if err != nil {
-			return members, err
-		}
-
-		bytes, err = lastRoundWithJSON.MarshalJSON()
+		err = json.Unmarshal(metadataJSON, &metadata)
 		if err != nil {
 			return members, err
 		}
 
 		var lastRoundWith map[string]int
-		err = json.Unmarshal(bytes, &lastRoundWith)
+		err = json.Unmarshal(lastRoundWithJSON, &lastRoundWith)
 		if err != nil {
 			return members, err
 		}

@@ -87,8 +87,8 @@ func TestSchedulerStopsWhenDueRoundLookupFails(t *testing.T) {
 	storeErr := errors.New("store unavailable")
 	processed := false
 	scheduler := Scheduler{
-		Clock: fixedClock{now: time.Now()},
-		Store: schedulerStoreFunc(func(context.Context, time.Time) ([]ScheduledRound, error) { return nil, storeErr }),
+		Clock:     fixedClock{now: time.Now()},
+		Store:     schedulerStoreFunc(func(context.Context, time.Time) ([]ScheduledRound, error) { return nil, storeErr }),
 		Processor: processorFunc(func(context.Context, ScheduledRound) error { processed = true; return nil }),
 	}
 	if err := scheduler.Run(context.Background()); !errors.Is(err, storeErr) || processed {
