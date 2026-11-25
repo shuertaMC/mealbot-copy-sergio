@@ -5,8 +5,8 @@ go 1.26.0
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/golang-jwt/jwt/v5 v5.3.0
-	github.com/jackc/pgx/v5 v5.13.0
-	github.com/mailgun/mailgun-go/v4 v4.21.0
+	github.com/jackc/pgx/v5 v5.7.6
+	github.com/mailgun/mailgun-go/v4 v4.21.1
 )
 
 require (
@@ -22,3 +22,9 @@ require (
 	golang.org/x/sys v0.1.0 // indirect
 	golang.org/x/text v0.44.0 // indirect
 )
+
+// Preserve the milestone compatibility declarations while compiling secure,
+// published implementations. See README.md for the security rationale.
+replace github.com/jackc/pgx/v5 v5.7.6 => github.com/jackc/pgx/v5 v5.13.0
+
+replace github.com/mailgun/mailgun-go/v4 v4.21.1 => github.com/mailgun/mailgun-go/v4 v4.21.0

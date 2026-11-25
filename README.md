@@ -162,9 +162,9 @@ The pre-refactor `go test ./...` result captured before behavior moved into the 
 
 ## Dependency compatibility and security
 
-The milestone requested `github.com/mailgun/mailgun-go/v4` v4.21.1, but that tag was never published; v4.21.0 is the closest available v4.21 release. The module therefore uses Mailgun v4.21.0 and explicitly selects `github.com/go-chi/chi/v5` v5.5.0 instead of Mailgun's older transitive v5.1.0. This override is intentional: chi's [GO-2025-3770](https://pkg.go.dev/vuln/GO-2025-3770) is fixed from v5.2.2 onward.
+The direct `require` declarations retain the milestone compatibility baselines: `github.com/mailgun/mailgun-go/v4` v4.21.1 and `github.com/jackc/pgx/v5` v5.7.6. They are declarations, not the code compiled into Mealbot. Version-scoped same-module `replace` directives make the effective build graph use Mailgun v4.21.0 and pgx v5.13.0 respectively.
 
-The requested `github.com/jackc/pgx/v5` v5.7.6 is not retained because [GO-2026-5004](https://pkg.go.dev/vuln/GO-2026-5004) was reachable in Mealbot through that version; the advisory is fixed from v5.9.2 onward. Mealbot uses pgx v5.13.0. These versions must not be downgraded to match unavailable or vulnerable milestone pins. The latest lifecycle `govulncheck ./...` gate, run `lifecycle-refresh-retry3`, exited successfully with `No vulnerabilities found.`; its raw result is recorded at `$MCODE_DIR/lifecycle/target/runs/lifecycle-refresh-retry3_govulncheck_result.json`.
+Mailgun v4.21.1 was never published, so v4.21.0 is the nearest resolvable v4.21 implementation. pgx v5.7.6 has reachable [GO-2026-5004](https://pkg.go.dev/vuln/GO-2026-5004); the effective v5.13.0 implementation is newer than the v5.9.2 fixed version. The graph also explicitly selects `github.com/go-chi/chi/v5` v5.5.0 instead of Mailgun's older transitive v5.1.0, because chi's [GO-2025-3770](https://pkg.go.dev/vuln/GO-2025-3770) is fixed from v5.2.2 onward, and retains `golang.org/x/text` v0.44.0. Do not remove these replacements or downgrade the effective versions merely to make the declarations and implementations identical; `go list -m all` reports each declared baseline followed by its effective replacement.
 
 ## External services
 
