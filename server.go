@@ -83,14 +83,16 @@ func newServeMux(mw Middleware) *http.ServeMux {
 func legacyHandlerSlots() httpapi.Handlers {
 	organizations := legacyOrganizationHandlers()
 	members := legacyMemberHandlers()
+	rounds := legacyRoundHandlers()
+	pairs := legacyPairHandlers()
 	return httpapi.Handlers{
 		Members:         members,
 		Organizations:   http.HandlerFunc(organizations.Organizations),
 		Organization:    http.HandlerFunc(organizations.Create),
 		CrossMatchTrait: http.HandlerFunc(organizations.CrossMatchTrait),
-		Rounds:          http.HandlerFunc(GetRoundsHandler),
-		Round:           http.HandlerFunc(RoundHandler),
-		Pairs:           http.HandlerFunc(GetPairsHandler),
+		Rounds:          http.HandlerFunc(rounds.Get),
+		Round:           rounds,
+		Pairs:           http.HandlerFunc(pairs.Get),
 	}
 }
 

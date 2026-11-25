@@ -2,10 +2,9 @@ package mealbot
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"net/http"
 
+	"github.com/johnamadeo/mealbot/internal/httpapi"
 	internalstore "github.com/johnamadeo/mealbot/internal/store"
 )
 
@@ -23,43 +22,39 @@ type GetPairsResponse struct {
 
 var getPairsForHandler = getPairsFromDB
 
+type legacyPairHTTPStore struct{}
+
+func (legacyPairHTTPStore) PairHistory(_ context.Context, organization string) ([][]internalstore.HistoricalPair, error) {
+	roundPairs, err := getPairsForHandler(organization)
+	if err != nil || roundPairs == nil {
+		return nil, err
+	}
+	history := make([][]internalstore.HistoricalPair, 0, len(roundPairs))
+	for _, round := range roundPairs {
+		pairs := make([]internalstore.HistoricalPair, 0, len(round))
+		for _, pair := range round {
+			stored := internalstore.HistoricalPair{
+				Member1: legacyStoredMember(pair.Member1),
+				Member2: legacyStoredMember(pair.Member2),
+			}
+			if !isZeroLegacyMember(pair.ExtraMember) {
+				extra := legacyStoredMember(pair.ExtraMember)
+				stored.ExtraMember = &extra
+			}
+			pairs = append(pairs, stored)
+		}
+		history = append(history, pairs)
+	}
+	return history, nil
+}
+
+func legacyPairHandlers() httpapi.PairHandlers {
+	return httpapi.NewPairHandlers(legacyPairHTTPStore{}, legacyResponder)
+}
+
 // GetPairsHandler : HTTP Handler for getting pairings for an organization
 func GetPairsHandler(w http.ResponseWriter, r *http.Request) {
-	function := "GetPairsHandler"
-	if r.Method != "GET" {
-		LogAndWriteErr(
-			w,
-			errors.New("Only GET requests are allowed at this route"),
-			http.StatusMethodNotAllowed,
-			function,
-		)
-		return
-	}
-
-	orgname, err := getQueryParam(r, "org")
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-
-	roundPairs, err := getPairsForHandler(orgname)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	resp := GetPairsResponse{
-		RoundPairs: roundPairs,
-	}
-
-	bytes, err := json.Marshal(resp)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write(bytes)
+	legacyPairHandlers().Get(w, r)
 }
 
 // getPairsFromDB : Get all the pairings for a particular organization
@@ -99,4 +94,18 @@ func legacyMember(member internalstore.Member) Member {
 		Metadata:      member.Metadata,
 		LastRoundWith: member.LastRoundWith,
 	}
+}
+
+func legacyStoredMember(member Member) internalstore.Member {
+	return internalstore.Member{
+		Organization:  member.Organization,
+		Email:         member.Email,
+		Name:          member.Name,
+		Metadata:      member.Metadata,
+		LastRoundWith: member.LastRoundWith,
+	}
+}
+
+func isZeroLegacyMember(member Member) bool {
+	return member.Organization == "" && member.Email == "" && member.Name == "" && member.Metadata == nil && member.LastRoundWith == nil
 }

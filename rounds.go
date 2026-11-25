@@ -2,12 +2,9 @@ package mealbot
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"net/http"
-	"strconv"
 
-	"github.com/johnamadeo/server"
+	"github.com/johnamadeo/mealbot/internal/httpapi"
 )
 
 const (
@@ -18,108 +15,51 @@ const (
 	TimestampFormat = "YYYY-MM-DD HH24:MI:ssZ"
 )
 
-// GetRoundsResponse : Data structure for storing the dates for each round
-type GetRoundsResponse struct {
-	Rounds []string `json:"rounds"`
-}
+// GetRoundsResponse remains as a compatibility alias while the transport DTO
+// is owned by internal/httpapi.
+type GetRoundsResponse = httpapi.RoundsResponse
 
 var addRoundForHandler = addRound
 var getRoundsForHandler = getRoundsFromDB
 var removeRoundForHandler = removeRound
 var rescheduleRoundForHandler = rescheduleRound
 
+type legacyRoundHTTPStore struct{}
+
+func (legacyRoundHTTPStore) ListRounds(_ context.Context, organization string) ([]string, error) {
+	return getRoundsForHandler(organization)
+}
+
+func (legacyRoundHTTPStore) AddRound(_ context.Context, organization, scheduled string) (int, error) {
+	err := addRoundForHandler(organization, scheduled)
+	return 0, err
+}
+
+func (legacyRoundHTTPStore) RescheduleRound(_ context.Context, organization, scheduled string, roundID int) error {
+	return rescheduleRoundForHandler(organization, scheduled, roundID)
+}
+
+func (legacyRoundHTTPStore) DeleteRound(_ context.Context, organization string, roundID int) error {
+	return removeRoundForHandler(organization, roundID)
+}
+
+func legacyRoundHandlers() httpapi.RoundHandlers {
+	return httpapi.NewRoundHandlers(legacyRoundHTTPStore{}, legacyResponder)
+}
+
 // AddRoundHandler : HTTP handler for scheduling a new round on a certain date
 func AddRoundHandler(w http.ResponseWriter, r *http.Request) {
-	function := "AddRoundHandler"
-	if r.Method != "POST" {
-		LogAndWriteErr(
-			w,
-			errors.New("Only POST requests are allowed at this route"),
-			http.StatusMethodNotAllowed,
-			function,
-		)
-		return
-	}
-
-	// TODO: Verify 'round' is a datestring in the YYYY-MM-DDTHH:mm:ss[Z] format
-	values, err := getQueryParams(r, []string{"org", "round"})
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-
-	orgname := values[0]
-	roundDate := values[1]
-
-	err = addRoundForHandler(orgname, roundDate)
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-
-	LogAndWrite(
-		w,
-		server.StrToBytes("Successfully scheduled a new round"),
-		http.StatusCreated,
-		function,
-	)
+	legacyRoundHandlers().Add(w, r)
 }
 
 // GetRoundsHandler : HTTP handler for retrieving the dates for all rounds scheduled
 func GetRoundsHandler(w http.ResponseWriter, r *http.Request) {
-	function := "GetRoundsHandler"
-	if r.Method != "GET" {
-		LogAndWriteErr(
-			w,
-			errors.New("Only GET requests are allowed at this route"),
-			http.StatusMethodNotAllowed,
-			function,
-		)
-		return
-	}
-
-	orgname, err := getQueryParam(r, "org")
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-
-	rounds, err := getRoundsForHandler(orgname)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	resp := GetRoundsResponse{Rounds: rounds}
-	bytes, err := json.Marshal(resp)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	LogAndWrite(w, bytes, http.StatusOK, function)
+	legacyRoundHandlers().Get(w, r)
 }
 
 // RoundHandler : Combined HTTP handler for rounds
 func RoundHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
-		_, err := getQueryParam(r, "roundId")
-		if err != nil {
-			AddRoundHandler(w, r)
-		} else {
-			RescheduleRoundHandler(w, r)
-		}
-	} else if r.Method == "DELETE" {
-		RemoveRoundHandler(w, r)
-	} else {
-		LogAndWriteErr(
-			w,
-			errors.New("Only POST and DELETE requests are allowed at this route"),
-			http.StatusMethodNotAllowed,
-			"RoundHandler",
-		)
-		return
-	}
+	legacyRoundHandlers().ServeHTTP(w, r)
 }
 
 func getRoundsFromDB(orgname string) ([]string, error) {
@@ -133,79 +73,12 @@ func getRoundsFromDB(orgname string) ([]string, error) {
 
 // RemoveRoundHandler : HTTP handler for cancelling a previously scheduled round
 func RemoveRoundHandler(w http.ResponseWriter, r *http.Request) {
-	function := "RemoveRoundHandler"
-	if r.Method != "DELETE" {
-		LogAndWriteErr(
-			w,
-			errors.New("Only DELETE requests are allowed at this route"),
-			http.StatusMethodNotAllowed,
-			function,
-		)
-		return
-	}
-
-	values, err := getQueryParams(r, []string{"org", "roundId"})
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-
-	orgname := values[0]
-	roundID, err := strconv.Atoi(values[1])
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	err = removeRoundForHandler(orgname, roundID)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	LogAndWrite(
-		w,
-		server.StrToBytes("Successfully removed round"),
-		http.StatusCreated,
-		function,
-	)
+	legacyRoundHandlers().Remove(w, r)
 }
 
 // RescheduleRoundHandler : HTTP handler for rescheduling the date of a particular round
 func RescheduleRoundHandler(w http.ResponseWriter, r *http.Request) {
-	function := "RescheduleRoundHandler"
-	if r.Method != "POST" {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		w.Write(server.StrToBytes("Only POST requests are allowed at this route"))
-		return
-	}
-
-	values, err := getQueryParams(r, []string{"org", "round", "roundId"})
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-
-	orgname := values[0]
-	roundDate := values[1]
-	roundID, err := strconv.Atoi(values[2])
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	err = rescheduleRoundForHandler(orgname, roundDate, roundID)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	LogAndWrite(
-		w,
-		server.StrToBytes("Succesfully changed date of the round"),
-		http.StatusCreated,
-		function,
-	)
+	legacyRoundHandlers().Reschedule(w, r)
 }
 
 func addRound(orgname string, roundDate string) error {
