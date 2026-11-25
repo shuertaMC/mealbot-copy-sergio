@@ -1,12 +1,12 @@
 package mealbot
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 
-	"github.com/johnamadeo/server"
+	internalstore "github.com/johnamadeo/mealbot/internal/store"
 )
 
 // GetPairsResponsePair : Data structure for a pairing
@@ -64,65 +64,39 @@ func GetPairsHandler(w http.ResponseWriter, r *http.Request) {
 
 // getPairsFromDB : Get all the pairings for a particular organization
 func getPairsFromDB(orgname string) ([][]GetPairsResponsePair, error) {
-	roundPairs := [][]GetPairsResponsePair{}
-
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
+	repository, db, err := openStoreAdapter()
 	if err != nil {
-		return roundPairs, err
+		return nil, err
 	}
-
-	members, err := getActiveMembersFromDBInPairFormat(orgname)
-	membersMap := map[string]Member{}
-	for _, member := range members {
-		membersMap[member.Email] = member
+	defer db.Close()
+	stored, err := repository.PairHistory(context.Background(), orgname)
+	if err != nil {
+		return nil, err
 	}
-
-	round := 0
-
-	for {
-		pairRows, err := db.Query(
-			"SELECT id1, id2, extraId FROM pairs WHERE organization = $1 AND round = $2",
-			orgname,
-			round,
-		)
-		if err != nil {
-			return roundPairs, err
-		}
-
-		numPairs := 0
-		pairs := []GetPairsResponsePair{}
-		for pairRows.Next() {
-			var id1, id2 string
-			var extraID sql.NullString
-			err := pairRows.Scan(&id1, &id2, &extraID)
-			if err != nil {
-				return roundPairs, err
+	roundPairs := make([][]GetPairsResponsePair, 0, len(stored))
+	for _, round := range stored {
+		pairs := make([]GetPairsResponsePair, 0, len(round))
+		for _, pair := range round {
+			responsePair := GetPairsResponsePair{
+				Member1: legacyMember(pair.Member1),
+				Member2: legacyMember(pair.Member2),
 			}
-
-			if extraID.Valid {
-				pairs = append(pairs, GetPairsResponsePair{
-					Member1:     membersMap[id1],
-					Member2:     membersMap[id2],
-					ExtraMember: membersMap[extraID.String],
-				})
-			} else {
-				pairs = append(pairs, GetPairsResponsePair{
-					Member1: membersMap[id1],
-					Member2: membersMap[id2],
-				})
+			if pair.ExtraMember != nil {
+				responsePair.ExtraMember = legacyMember(*pair.ExtraMember)
 			}
-
-			numPairs++
+			pairs = append(pairs, responsePair)
 		}
-
-		if numPairs == 0 {
-			break
-		}
-
 		roundPairs = append(roundPairs, pairs)
-		round++
 	}
-
 	return roundPairs, nil
+}
+
+func legacyMember(member internalstore.Member) Member {
+	return Member{
+		Organization:  member.Organization,
+		Email:         member.Email,
+		Name:          member.Name,
+		Metadata:      member.Metadata,
+		LastRoundWith: member.LastRoundWith,
+	}
 }

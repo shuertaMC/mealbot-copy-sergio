@@ -1,11 +1,11 @@
 package mealbot
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/johnamadeo/server"
 )
@@ -123,33 +123,12 @@ func RoundHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getRoundsFromDB(orgname string) ([]string, error) {
-	db, err := server.CreateDBConnection(LocalDBConnection)
+	repository, db, err := openStoreAdapter()
+	if err != nil {
+		return []string{}, err
+	}
 	defer db.Close()
-	if err != nil {
-		return []string{}, err
-	}
-
-	rows, err := db.Query(
-		"SELECT to_char(scheduled_date, $1) FROM rounds WHERE organization = $2 ORDER BY id ASC",
-		TimestampFormat,
-		orgname,
-	)
-	if err != nil {
-		return []string{}, err
-	}
-
-	rounds := []string{}
-	for rows.Next() {
-		var roundDate string
-		err = rows.Scan(&roundDate)
-		if err != nil {
-			return []string{}, err
-		}
-
-		rounds = append(rounds, roundDate)
-	}
-
-	return rounds, nil
+	return repository.ListRounds(context.Background(), orgname)
 }
 
 // RemoveRoundHandler : HTTP handler for cancelling a previously scheduled round
@@ -230,98 +209,29 @@ func RescheduleRoundHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func addRound(orgname string, roundDate string) error {
-	db, err := server.CreateDBConnection(LocalDBConnection)
+	repository, db, err := openStoreAdapter()
+	if err != nil {
+		return err
+	}
 	defer db.Close()
-	if err != nil {
-		return err
-	}
-
-	rows, err := db.Query(
-		"SELECT MAX(id) FROM rounds WHERE organization = $1",
-		orgname,
-	)
-
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	maxRoundID := -1
-	for rows.Next() {
-		err := rows.Scan(&maxRoundID)
-
-		if err != nil && !strings.Contains(err.Error(), NoMaxRoundErr) {
-			return err
-		}
-		break
-	}
-
-	_, err = db.Exec(
-		"INSERT INTO rounds (organization, id, scheduled_date, done) VALUES ($1, $2, $3, $4)",
-		orgname,
-		maxRoundID+1,
-		roundDate,
-		false,
-	)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	_, err = repository.AddRound(context.Background(), orgname, roundDate)
+	return err
 }
 
 func removeRound(orgname string, roundID int) error {
-	db, err := server.CreateDBConnection(LocalDBConnection)
+	repository, db, err := openStoreAdapter()
+	if err != nil {
+		return err
+	}
 	defer db.Close()
-	if err != nil {
-		return err
-	}
-
-	_, err = db.Exec(
-		"DELETE FROM rounds WHERE organization = $1 AND id = $2",
-		orgname,
-		roundID,
-	)
-	if err != nil {
-		return err
-	}
-
-	for {
-		result, err := db.Exec(
-			"UPDATE rounds SET id = $1 WHERE organization = $2 AND id = $3",
-			roundID,
-			orgname,
-			roundID+1,
-		)
-		if err != nil {
-			return err
-		}
-		if numRows, _ := result.RowsAffected(); numRows == 0 {
-			break
-		}
-
-		roundID++
-	}
-
-	return nil
+	return repository.DeleteRound(context.Background(), orgname, roundID)
 }
 
 func rescheduleRound(orgname string, roundDate string, roundID int) error {
-	db, err := server.CreateDBConnection(LocalDBConnection)
+	repository, db, err := openStoreAdapter()
+	if err != nil {
+		return err
+	}
 	defer db.Close()
-	if err != nil {
-		return err
-	}
-
-	_, err = db.Exec(
-		"UPDATE rounds SET scheduled_date = $1 WHERE organization = $2 AND id = $3",
-		roundDate,
-		orgname,
-		roundID,
-	)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return repository.RescheduleRound(context.Background(), orgname, roundDate, roundID)
 }

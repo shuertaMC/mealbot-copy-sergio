@@ -17,17 +17,26 @@ type ledgerEntry struct {
 	checksum string
 }
 
+type queryFixture struct {
+	contains    string
+	columns     []string
+	values      [][]driver.Value
+	terminalErr error
+}
+
 type driverState struct {
-	mu           sync.Mutex
-	events       []string
-	applied      map[int64]ledgerEntry
-	queryColumns []string
-	queryValues  [][]driver.Value
-	queryRowsErr error
-	failSQL      string
-	beginErr     error
-	commitErr    error
-	rollbackErr  error
+	mu            sync.Mutex
+	events        []string
+	queryArgs     [][]driver.NamedValue
+	applied       map[int64]ledgerEntry
+	queryColumns  []string
+	queryValues   [][]driver.Value
+	queryRowsErr  error
+	queryFixtures []queryFixture
+	failSQL       string
+	beginErr      error
+	commitErr     error
+	rollbackErr   error
 }
 
 func (s *driverState) event(value string) {
@@ -101,6 +110,17 @@ func (c *testConn) QueryContext(_ context.Context, query string, args []driver.N
 	}
 	c.state.mu.Lock()
 	defer c.state.mu.Unlock()
+	copiedArgs := append([]driver.NamedValue(nil), args...)
+	c.state.queryArgs = append(c.state.queryArgs, copiedArgs)
+	for _, fixture := range c.state.queryFixtures {
+		if strings.Contains(query, fixture.contains) {
+			return &testRows{
+				columns:     append([]string(nil), fixture.columns...),
+				values:      append([][]driver.Value(nil), fixture.values...),
+				terminalErr: fixture.terminalErr,
+			}, nil
+		}
+	}
 	if strings.Contains(query, "FROM members") && c.state.queryColumns != nil {
 		return &testRows{
 			columns:     append([]string(nil), c.state.queryColumns...),

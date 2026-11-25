@@ -2,7 +2,6 @@ package mealbot
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	pairingdomain "github.com/johnamadeo/mealbot/internal/pairing"
-	"github.com/johnamadeo/server"
 	mailgun "github.com/mailgun/mailgun-go"
 )
 
@@ -118,88 +116,21 @@ func sendEmails(orgname string, round Round, members MembersMap) error {
 }
 
 func getMinimalMembersFromDB(orgname string) (MembersMap, error) {
-	crossMatchTrait, err := GetCrossMatchTrait(orgname)
+	repository, db, err := openStoreAdapter()
 	if err != nil {
 		return MembersMap{}, err
 	}
-
-	db, err := server.CreateDBConnection(LocalDBConnection)
 	defer db.Close()
-	if err != nil {
-		return MembersMap{}, err
-	}
-
-	minimalMembers := MembersMap{}
-	members, err := GetMembersFromDB(orgname, true)
-	if err != nil {
-		return MembersMap{}, err
-	}
-
-	for _, member := range members {
-		minimalMembers[member.Email] = MinimalMember{
-			ID:            member.Email,
-			Name:          member.Name,
-			Trait:         member.Metadata[crossMatchTrait],
-			LastRoundWith: member.LastRoundWith,
-		}
-	}
-
-	return minimalMembers, nil
+	return repository.LoadMembers(context.Background(), orgname)
 }
 
 func saveRoundInDB(round Round, members MembersMap, orgname string) error {
-	db, err := server.CreateDBConnection(LocalDBConnection)
+	repository, db, err := openStoreAdapter()
+	if err != nil {
+		return err
+	}
 	defer db.Close()
-	if err != nil {
-		return err
-	}
-
-	for pair := range round.Pairs {
-		columns := "(organization, id1, id2, extraId, round)"
-		placeholder := "($1, $2, $3, $4, $5)"
-
-		_, err := db.Exec(
-			fmt.Sprintf("INSERT INTO pairs %s VALUES %s", columns, placeholder),
-			orgname,
-			pair.ID1,
-			pair.ID2,
-			pair.ExtraID,
-			round.Number,
-		)
-
-		if err != nil {
-			return err
-		}
-	}
-
-	for _, member := range members {
-		bytes, err := json.Marshal(member.LastRoundWith)
-		if err != nil {
-			return err
-		}
-
-		_, err = db.Exec(
-			"UPDATE members SET last_round_with = $1 WHERE organization = $2 AND email = $3",
-			server.JSONB(bytes),
-			orgname,
-			member.ID,
-		)
-		if err != nil {
-			return err
-		}
-	}
-
-	_, err = db.Exec(
-		"UPDATE rounds SET done = $1 WHERE organization = $2 AND id = $3",
-		true,
-		orgname,
-		round.Number,
-	)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return repository.SaveRound(context.Background(), orgname, round, members)
 }
 
 func sendEmail(orgname string, toEmails []string, toNames []string) error {
@@ -264,29 +195,10 @@ func (p legacyRoundProcessor) ProcessRound(_ context.Context, round pairingdomai
 type legacyDueRoundStore struct{}
 
 func (legacyDueRoundStore) DueRounds(ctx context.Context, before time.Time) ([]pairingdomain.ScheduledRound, error) {
-	db, err := server.CreateDBConnection(LocalDBConnection)
+	repository, db, err := openStoreAdapter()
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx,
-		"SELECT organization, id FROM rounds WHERE scheduled_date < $1 AND done = false",
-		before,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	rounds := []pairingdomain.ScheduledRound{}
-	for rows.Next() {
-		var round pairingdomain.ScheduledRound
-		if err := rows.Scan(&round.Organization, &round.Number); err != nil {
-			return nil, err
-		}
-		rounds = append(rounds, round)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return rounds, nil
+	return repository.DueRounds(ctx, before)
 }
