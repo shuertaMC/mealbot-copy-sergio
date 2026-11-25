@@ -30,6 +30,11 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+// postgresIntegrationSuiteLockKey is the ASCII string "MEALBOTT" encoded as
+// an int64. Every destructive PostgreSQL integration suite uses this stable
+// session advisory lock so package test binaries can safely share DATABASE_URL.
+const postgresIntegrationSuiteLockKey int64 = 0x4d45414c424f5454
+
 func TestPostgresVerticalAcceptance(t *testing.T) {
 	if os.Getenv("RUN_POSTGRES_INTEGRATION") != "1" {
 		t.Skip("set RUN_POSTGRES_INTEGRATION=1 with a disposable DATABASE_URL")
@@ -50,6 +55,7 @@ func TestPostgresVerticalAcceptance(t *testing.T) {
 			t.Errorf("close PostgreSQL verification connection: %v", err)
 		}
 	})
+	acquireAcceptancePostgresSuiteLock(t, ctx, database)
 	if err := database.PingContext(ctx); err != nil {
 		t.Fatalf("ping PostgreSQL: %v", err)
 	}
@@ -193,6 +199,35 @@ func TestPostgresVerticalAcceptance(t *testing.T) {
 	if privacyStatus != http.StatusOK || !bytes.Contains(privacyBody, []byte("<title>Privacy Policy</title>")) {
 		t.Fatalf("privacy response = %d %q", privacyStatus, privacyBody)
 	}
+}
+
+func acquireAcceptancePostgresSuiteLock(t *testing.T, ctx context.Context, database *sql.DB) {
+	t.Helper()
+	lockContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	connection, err := database.Conn(lockContext)
+	if err != nil {
+		t.Fatalf("open dedicated PostgreSQL integration lock session: %v", err)
+	}
+	if _, err := connection.ExecContext(lockContext, "SELECT pg_advisory_lock($1)", postgresIntegrationSuiteLockKey); err != nil {
+		closeErr := connection.Close()
+		t.Fatalf("acquire PostgreSQL integration advisory lock: %v; close lock session: %v", err, closeErr)
+	}
+	t.Cleanup(func() {
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		var released bool
+		if err := connection.QueryRowContext(cleanupContext,
+			"SELECT pg_advisory_unlock($1)", postgresIntegrationSuiteLockKey,
+		).Scan(&released); err != nil {
+			t.Errorf("release PostgreSQL integration advisory lock: %v", err)
+		} else if !released {
+			t.Error("release PostgreSQL integration advisory lock: lock was not held by dedicated session")
+		}
+		if err := connection.Close(); err != nil {
+			t.Errorf("close PostgreSQL integration lock session: %v", err)
+		}
+	})
 }
 
 func newAcceptanceJWKSServer(t *testing.T, keyID string, publicKey *rsa.PublicKey) *httptest.Server {
