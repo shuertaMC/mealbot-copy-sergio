@@ -11,7 +11,10 @@ import (
 	"github.com/johnamadeo/mealbot/internal/store"
 )
 
-const maxMultipartMemory = 32 << 20
+const (
+	maxMultipartMemory        = 32 << 20
+	maxRequestBodyBytes int64 = 32 << 20
+)
 
 // MemberResponse preserves dynamic metadata while adding the two required
 // member identity fields.
@@ -43,6 +46,7 @@ type MemberHandlers struct {
 	organizations CrossMatchTraitReader
 	responder     Responder
 	maxMemory     int64
+	maxBodyBytes  int64
 }
 
 // NewMemberHandlers constructs member handlers with explicit dependencies.
@@ -52,6 +56,7 @@ func NewMemberHandlers(members MemberStore, organizations CrossMatchTraitReader,
 		organizations: organizations,
 		responder:     responder,
 		maxMemory:     maxMultipartMemory,
+		maxBodyBytes:  maxRequestBodyBytes,
 	}
 }
 
@@ -129,7 +134,12 @@ func (h MemberHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		h.responder.WriteBadRequest(w, err, function)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxBodyBytes)
 	if err := r.ParseMultipartForm(h.maxMemory); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			err = maxBytesError
+		}
 		h.responder.WriteBadRequest(w, err, function)
 		return
 	}

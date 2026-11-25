@@ -27,14 +27,15 @@ type OrganizationsResponse struct {
 
 // OrganizationHandlers owns the three organization HTTP endpoints.
 type OrganizationHandlers struct {
-	store     OrganizationStore
-	responder Responder
+	store        OrganizationStore
+	responder    Responder
+	maxBodyBytes int64
 }
 
 // NewOrganizationHandlers constructs organization handlers with no global
 // persistence or logging dependencies.
 func NewOrganizationHandlers(store OrganizationStore, responder Responder) OrganizationHandlers {
-	return OrganizationHandlers{store: store, responder: responder}
+	return OrganizationHandlers{store: store, responder: responder, maxBodyBytes: maxRequestBodyBytes}
 }
 
 // Organizations handles GET /orgs.
@@ -79,6 +80,7 @@ func (h OrganizationHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxBodyBytes)
 	contents, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.responder.WriteBadRequest(w, err, function)
@@ -121,6 +123,7 @@ func (h OrganizationHandlers) CrossMatchTrait(w http.ResponseWriter, r *http.Req
 		h.responder.WriteBadRequest(w, err, function)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxBodyBytes)
 	contents, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.responder.WriteBadRequest(w, errors.New("Malformed body."), function)

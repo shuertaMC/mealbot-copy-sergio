@@ -156,6 +156,18 @@ func TestOrganizationHandlersValidateBodiesAndNullableTrait(t *testing.T) {
 	}
 }
 
+func TestOrganizationHandlersRejectOversizedBodiesBeforeStoreMutation(t *testing.T) {
+	store := &fakeOrganizationStore{}
+	handlers := NewOrganizationHandlers(store, NewResponder(nil))
+	handlers.maxBodyBytes = 1
+
+	assertHandlerResponse(t, handlers.Create, http.MethodPost, "/org?admin=owner", `{"org":"alpha"}`, http.StatusBadRequest, `{"Message":"http: request body too large"}`)
+	assertHandlerResponse(t, handlers.CrossMatchTrait, http.MethodPost, "/crossmatchtrait?org=alpha", `{"trait":"cohort"}`, http.StatusBadRequest, `{"Message":"Malformed body."}`)
+	if store.calls != 0 {
+		t.Fatalf("store calls = %d, want 0", store.calls)
+	}
+}
+
 func TestOrganizationHandlersMapEmptyResults(t *testing.T) {
 	store := &fakeOrganizationStore{}
 	handlers := NewOrganizationHandlers(store, NewResponder(nil))

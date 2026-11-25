@@ -196,6 +196,21 @@ func TestMemberCreateRejectsMalformedRequestsBeforeStoreMutation(t *testing.T) {
 	}
 }
 
+func TestMemberCreateRejectsOversizedMultipartBeforeStoreMutation(t *testing.T) {
+	members := &fakeMemberStore{}
+	handlers := NewMemberHandlers(members, &fakeTraitReader{}, NewResponder(nil))
+	handlers.maxBodyBytes = 1
+
+	recorder := httptest.NewRecorder()
+	handlers.Create(recorder, multipartRequest(t, "/members?org=alpha", "members", "people.csv", "Name,Email\nAlice,a@example.com\n"))
+	if recorder.Code != http.StatusBadRequest || recorder.Body.String() != `{"Message":"http: request body too large"}` {
+		t.Fatalf("oversized multipart = (%d, %q)", recorder.Code, recorder.Body.String())
+	}
+	if members.syncCalls != 0 {
+		t.Fatalf("sync calls = %d, want 0", members.syncCalls)
+	}
+}
+
 func TestMemberCreateRemovesMultipartSpillFile(t *testing.T) {
 	csv := "Name,Email\nAlice,alice@example.com\n"
 	members := &fakeMemberStore{plan: store.MemberSyncPlan{Members: []store.MemberInput{{Name: "Alice", Email: "alice@example.com"}}}}
