@@ -39,6 +39,18 @@ func NewResponder(logger *slog.Logger) Responder {
 	return Responder{logger: logger}
 }
 
+// Cleanup invokes cleanup and reports failures without exposing the underlying
+// error or changing an HTTP response. Resource must be a fixed, non-sensitive
+// label supplied by the caller rather than a filename or path.
+func (r Responder) Cleanup(function, resource string, cleanup func() error) {
+	if cleanup == nil {
+		return
+	}
+	if err := cleanup(); err != nil && r.logger != nil {
+		r.logger.Error("resource cleanup failed", "function", function, "resource", resource)
+	}
+}
+
 // Write reproduces the legacy success behavior exactly. status is retained as
 // a logging field but is intentionally not passed to WriteHeader: successful
 // legacy handlers therefore keep their implicit 200 status and net/http's

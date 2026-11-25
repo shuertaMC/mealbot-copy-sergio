@@ -47,7 +47,10 @@ var getActiveMembersForHandler = getActiveMembersFromDBAsMap
 var getCrossMatchTraitForHandler = GetCrossMatchTrait
 var createMembersFromCSVForHandler = createMembersFromCSV
 
-type legacyMemberHTTPStore struct{}
+type legacyMemberHTTPStore struct {
+	responder httpapi.Responder
+	removeAll func(string) error
+}
 
 func (legacyMemberHTTPStore) Members(_ context.Context, organization string, onlyActive bool) ([]internalstore.Member, error) {
 	if onlyActive {
@@ -91,7 +94,8 @@ func (legacyMemberHTTPStore) Members(_ context.Context, organization string, onl
 	return members, nil
 }
 
-func (legacyMemberHTTPStore) SynchronizeMembersCSV(_ context.Context, organization string, source io.Reader) (internalstore.MemberSyncPlan, error) {
+func (s legacyMemberHTTPStore) SynchronizeMembersCSV(_ context.Context, organization string, source io.Reader) (internalstore.MemberSyncPlan, error) {
+	const function = "CreateMembersHandler"
 	filename := "members.csv"
 	if upload, ok := source.(interface{ UploadFilename() string }); ok {
 		if base := filepath.Base(upload.UploadFilename()); base != "." && base != string(filepath.Separator) && base != "" {
@@ -102,14 +106,20 @@ func (legacyMemberHTTPStore) SynchronizeMembersCSV(_ context.Context, organizati
 	if err != nil {
 		return internalstore.MemberSyncPlan{}, err
 	}
-	defer os.RemoveAll(temporaryDirectory)
+	removeAll := s.removeAll
+	if removeAll == nil {
+		removeAll = os.RemoveAll
+	}
+	defer s.responder.Cleanup(function, "temporary member upload directory", func() error {
+		return removeAll(temporaryDirectory)
+	})
 	path := filepath.Join(temporaryDirectory, filename)
 	file, err := os.Create(path)
 	if err != nil {
 		return internalstore.MemberSyncPlan{}, err
 	}
 	if _, err := io.Copy(file, source); err != nil {
-		_ = file.Close()
+		s.responder.Cleanup(function, "temporary member upload file", file.Close)
 		return internalstore.MemberSyncPlan{}, err
 	}
 	if err := file.Close(); err != nil {
@@ -138,7 +148,10 @@ func (legacyMemberHTTPStore) SynchronizeMembersCSV(_ context.Context, organizati
 }
 
 func legacyMemberHandlers() httpapi.MemberHandlers {
-	return httpapi.NewMemberHandlers(legacyMemberHTTPStore{}, legacyOrganizationHTTPStore{}, legacyResponder)
+	return httpapi.NewMemberHandlers(legacyMemberHTTPStore{
+		responder: legacyResponder,
+		removeAll: os.RemoveAll,
+	}, legacyOrganizationHTTPStore{}, legacyResponder)
 }
 
 // MembersHandler : Combined handlers for create and retrieving members

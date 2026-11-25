@@ -144,14 +144,14 @@ func (h MemberHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.MultipartForm != nil {
-		defer r.MultipartForm.RemoveAll()
+		defer h.responder.Cleanup(function, "multipart form", r.MultipartForm.RemoveAll)
 	}
 	formFile, header, err := r.FormFile("members")
 	if err != nil {
 		h.responder.WriteBadRequest(w, err, function)
 		return
 	}
-	defer formFile.Close()
+	defer h.responder.Cleanup(function, "multipart file", formFile.Close)
 	contents, err := io.ReadAll(formFile)
 	if err != nil {
 		h.responder.WriteInternalServerError(w, err, function)

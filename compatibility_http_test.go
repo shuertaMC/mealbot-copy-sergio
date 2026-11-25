@@ -5,18 +5,24 @@ package mealbot
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"io/ioutil"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/johnamadeo/mealbot/internal/httpapi"
+	internalstore "github.com/johnamadeo/mealbot/internal/store"
 )
 
 type responseExpectation struct {
@@ -333,6 +339,97 @@ func TestCreateMembersMultipartResponseContract(t *testing.T) {
 		`{"members":[{"cohort":"2024","email":"alice@example.com","name":"Alice"}],"traits":["cohort"]}`,
 		"text/plain; charset=utf-8",
 	})
+}
+
+func TestLegacyMemberUploadCleanupFailureIsLogOnly(t *testing.T) {
+	originalCreateMembers := createMembersFromCSVForHandler
+	defer func() { createMembersFromCSVForHandler = originalCreateMembers }()
+
+	var uploadPath string
+	createMembersFromCSVForHandler = func(organization, filename string) ([]MemberResponse, error) {
+		uploadPath = filename
+		contents, err := os.ReadFile(filename)
+		if err != nil {
+			return nil, err
+		}
+		if organization != "alpha" || string(contents) != "Name,Email\nAlice,alice@example.com\n" {
+			return nil, errors.New("unexpected upload contents")
+		}
+		return []MemberResponse{{"name": "Alice", "email": "alice@example.com"}}, nil
+	}
+
+	cleanupErr := errors.New("forced removal failure for private path")
+	var removedDirectory string
+	var logs bytes.Buffer
+	adapter := legacyMemberHTTPStore{
+		responder: httpapi.NewResponder(slog.New(slog.NewJSONHandler(&logs, nil))),
+		removeAll: func(path string) error {
+			removedDirectory = path
+			return cleanupErr
+		},
+	}
+	plan, err := adapter.SynchronizeMembersCSV(
+		context.Background(),
+		"alpha",
+		strings.NewReader("Name,Email\nAlice,alice@example.com\n"),
+	)
+	if removedDirectory != "" {
+		defer os.RemoveAll(removedDirectory)
+	}
+	if err != nil {
+		t.Fatalf("SynchronizeMembersCSV() error = %v", err)
+	}
+	want := internalstore.MemberSyncPlan{
+		Organization: "alpha",
+		Members: []internalstore.MemberInput{{
+			Name: "Alice", Email: "alice@example.com", Metadata: map[string]string{},
+		}},
+	}
+	if !reflect.DeepEqual(plan, want) {
+		t.Fatalf("synchronization plan = %#v, want %#v", plan, want)
+	}
+	if removedDirectory == "" || filepath.Dir(uploadPath) != removedDirectory {
+		t.Fatalf("cleanup directory = %q, upload path = %q", removedDirectory, uploadPath)
+	}
+	logged := logs.String()
+	for _, wantField := range []string{
+		`"msg":"resource cleanup failed"`,
+		`"function":"CreateMembersHandler"`,
+		`"resource":"temporary member upload directory"`,
+	} {
+		if !strings.Contains(logged, wantField) {
+			t.Fatalf("cleanup log %q does not contain %q", logged, wantField)
+		}
+	}
+	for _, sensitive := range []string{cleanupErr.Error(), removedDirectory, uploadPath} {
+		if strings.Contains(logged, sensitive) {
+			t.Fatalf("cleanup log contains sensitive value %q: %s", sensitive, logged)
+		}
+	}
+}
+
+func TestLegacyMemberUploadZeroValueRemovesTemporaryDirectory(t *testing.T) {
+	originalCreateMembers := createMembersFromCSVForHandler
+	defer func() { createMembersFromCSVForHandler = originalCreateMembers }()
+
+	var uploadPath string
+	createMembersFromCSVForHandler = func(_, filename string) ([]MemberResponse, error) {
+		uploadPath = filename
+		return []MemberResponse{{"name": "Alice", "email": "alice@example.com"}}, nil
+	}
+	if _, err := (legacyMemberHTTPStore{}).SynchronizeMembersCSV(
+		context.Background(),
+		"alpha",
+		strings.NewReader("Name,Email\nAlice,alice@example.com\n"),
+	); err != nil {
+		t.Fatalf("SynchronizeMembersCSV() error = %v", err)
+	}
+	if uploadPath == "" {
+		t.Fatal("compatibility parser was not invoked")
+	}
+	if _, err := os.Stat(filepath.Dir(uploadPath)); !os.IsNotExist(err) {
+		t.Fatalf("temporary directory still exists after synchronization: %v", err)
+	}
 }
 
 func TestHandlerDatabaseErrorsUseLegacyMessageEnvelope(t *testing.T) {
