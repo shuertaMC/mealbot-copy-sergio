@@ -1,28 +1,28 @@
-// Command mealbot is the composition root for the web, pairing, and migration
-// modes of the Mealbot service.
+// Command mealbot is the production composition root for the web, pairing,
+// and legacy pair-history migration modes.
 package main
 
 import (
-	"log"
-	"net/http"
+	"context"
+	"fmt"
+	"log/slog"
 	"os"
-	"time"
-
-	mealbot "github.com/johnamadeo/mealbot"
-	"github.com/johnamadeo/mealbot/internal/config"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
-	if mealbot.DispatchCommand(os.Args, os.Stdout) {
-		return
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	cfg := config.Load(os.Getenv)
-	server := &http.Server{
-		Addr:              cfg.Address(),
-		Handler:           mealbot.NewHandler(),
-		ReadHeaderTimeout: 10 * time.Second,
+	if err := Run(ctx, os.Args[1:], os.Getenv, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
+}
 
-	log.Fatal(server.ListenAndServe())
+// defaultLogger is deliberately constructed in main's dependency graph. No
+// package-level logger or environment lookup participates in command startup.
+func defaultLogger() *slog.Logger {
+	return slog.New(slog.NewJSONHandler(os.Stdout, nil))
 }
