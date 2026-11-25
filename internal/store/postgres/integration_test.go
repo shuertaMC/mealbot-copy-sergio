@@ -98,6 +98,35 @@ func TestPostgresRepositoryIntegration(t *testing.T) {
 	if err != nil || len(active) != 3 {
 		t.Fatalf("reactivate ReconcileMembers = %#v, %v", active, err)
 	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE FUNCTION mealbot_test_fail_member_reconcile() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.email = 'b@example.test' THEN
+				RAISE EXCEPTION 'injected member reconciliation failure';
+			END IF;
+			RETURN NEW;
+		END $$;
+		CREATE TRIGGER mealbot_test_fail_member_reconcile BEFORE INSERT OR UPDATE ON members
+		FOR EACH ROW EXECUTE FUNCTION mealbot_test_fail_member_reconcile()`); err != nil {
+		t.Fatalf("create member reconciliation failure trigger: %v", err)
+	}
+	failedMemberA := memberA.Clone()
+	failedMemberA.Name = "Alpha Transaction Attempt"
+	failedActive, err := repository.ReconcileMembers(ctx, organization.Name, []domain.Member{failedMemberA, memberB, memberC})
+	if err == nil || failedActive != nil {
+		t.Fatalf("ReconcileMembers injected failure = %#v, %v", failedActive, err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		DROP TRIGGER mealbot_test_fail_member_reconcile ON members;
+		DROP FUNCTION mealbot_test_fail_member_reconcile()`); err != nil {
+		t.Fatalf("drop member reconciliation failure trigger: %v", err)
+	}
+	rolledBackMembers, err := repository.ListMembers(ctx, organization.Name, false)
+	if err != nil {
+		t.Fatalf("read member reconciliation rollback state: %v", err)
+	}
+	assertMemberState(t, rolledBackMembers, memberA.Email, true, "Alpha Updated")
+	assertMemberState(t, rolledBackMembers, memberB.Email, true, "Beta")
 
 	base := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
 	round0, err := repository.AddRound(ctx, organization.Name, base)

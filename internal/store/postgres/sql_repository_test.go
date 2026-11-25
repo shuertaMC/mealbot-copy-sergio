@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/johnamadeo/mealbot/internal/config"
 	"github.com/johnamadeo/mealbot/internal/domain"
 )
@@ -87,6 +88,44 @@ func TestListAndReconcileMembers(t *testing.T) {
 	}
 	if active[0].LastRoundWith["b@example.test"] != -1 || active[1].LastRoundWith["a@example.test"] != -1 {
 		t.Fatalf("ReconcileMembers did not extend symmetric histories: %#v", active)
+	}
+}
+
+func TestReconcileMembersRollsBackAfterPartialMutation(t *testing.T) {
+	t.Parallel()
+	repository, mock := mockRepository(t)
+	ctx := context.Background()
+	columns := []string{"organization", "email", "name", "metadata", "active", "last_round_with"}
+	memberA := mustMember(t, "org", "a@example.test", "A")
+	memberB := mustMember(t, "org", "b@example.test", "B")
+	injected := &pgconn.PgError{Code: "23514", Message: "injected member constraint failure"}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT name FROM organizations").WithArgs("org").
+		WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("org"))
+	mock.ExpectQuery("SELECT organization, email, name, metadata, active, last_round_with").WithArgs("org").
+		WillReturnRows(sqlmock.NewRows(columns))
+	mock.ExpectExec("INSERT INTO members").
+		WithArgs("org", "a@example.test", "A", sqlmock.AnyArg(), true, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO members").
+		WithArgs("org", "b@example.test", "B", sqlmock.AnyArg(), true, sqlmock.AnyArg()).
+		WillReturnError(injected)
+	mock.ExpectRollback()
+
+	active, err := repository.ReconcileMembers(ctx, "org", []domain.Member{memberB, memberA})
+	if active != nil {
+		t.Fatalf("ReconcileMembers returned partial success: %#v", active)
+	}
+	if !domain.IsIntegrity(err) || domain.KindOf(err) != domain.ErrorKindIntegrity {
+		t.Fatalf("ReconcileMembers error = %v, want integrity", err)
+	}
+	if !errors.Is(err, injected) {
+		t.Fatalf("ReconcileMembers error does not wrap repository failure: %v", err)
+	}
+	var classified *domain.Error
+	if !errors.As(err, &classified) || classified.Operation() != "save reconciled member" {
+		t.Fatalf("ReconcileMembers classified error = %#v, want save operation", classified)
 	}
 }
 
