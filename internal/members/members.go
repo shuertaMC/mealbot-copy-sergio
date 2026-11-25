@@ -1,4 +1,5 @@
-package main
+// Package members implements the member handlers, CSV import and member queries.
+package members
 
 import (
 	"bufio"
@@ -12,7 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/johnamadeo/server"
+	"github.com/johnamadeo/mealbot/internal/db"
+	"github.com/johnamadeo/mealbot/internal/httputil"
+	"github.com/johnamadeo/mealbot/internal/org"
 )
 
 const (
@@ -51,20 +54,30 @@ type GetMembersResponse struct {
 	CrossMatchTrait string           `json:"crossMatchTrait"`
 }
 
+// Handler serves the member routes using DB for persistence.
+type Handler struct {
+	DB db.Querier
+}
+
+// NewHandler returns a Handler backed by q.
+func NewHandler(q db.Querier) *Handler {
+	return &Handler{DB: q}
+}
+
 // MembersHandler : Combined handlers for create and retrieving members
-func MembersHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) MembersHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
-		CreateMembersHandler(w, r)
+		h.CreateMembersHandler(w, r)
 	} else if r.Method == "GET" {
-		GetMembersHandler(w, r)
+		h.GetMembersHandler(w, r)
 	}
 }
 
 // GetMembersHandler : HTTP handler for retrieving members
-func GetMembersHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) GetMembersHandler(w http.ResponseWriter, r *http.Request) {
 	function := "GetMembersHandler"
 	if r.Method != "GET" {
-		LogAndWriteErr(
+		httputil.LogAndWriteErr(
 			w,
 			errors.New("Only GET requests are allowed at this route"),
 			http.StatusMethodNotAllowed,
@@ -73,15 +86,15 @@ func GetMembersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	orgname, err := getQueryParam(r, "org")
+	orgname, err := httputil.GetQueryParam(r, "org")
 	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
+		httputil.LogAndWriteStatusBadRequest(w, err, function)
 		return
 	}
 
-	members, err := getActiveMembersFromDBAsMap(orgname)
+	members, err := GetActiveMembersAsMap(h.DB, orgname)
 	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
+		httputil.LogAndWriteStatusInternalServerError(w, err, function)
 		return
 	}
 
@@ -94,9 +107,9 @@ func GetMembersHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	crossMatchTrait, err := GetCrossMatchTrait(orgname)
+	crossMatchTrait, err := org.GetCrossMatchTrait(h.DB, orgname)
 	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
+		httputil.LogAndWriteStatusInternalServerError(w, err, function)
 		return
 	}
 
@@ -110,19 +123,18 @@ func GetMembersHandler(w http.ResponseWriter, r *http.Request) {
 
 	bytes, err := json.Marshal(resp)
 	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
+		httputil.LogAndWriteStatusInternalServerError(w, err, function)
 		return
 	}
 
-	LogAndWrite(w, bytes, http.StatusOK, function)
+	httputil.LogAndWrite(w, bytes, http.StatusOK, function)
 }
 
-// TODO: The problem is here!
 // CreateMembersHandler : HTTP handler for creating members
-func CreateMembersHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CreateMembersHandler(w http.ResponseWriter, r *http.Request) {
 	function := "CreateMembersHandler"
 	if r.Method != "POST" {
-		LogAndWriteErr(
+		httputil.LogAndWriteErr(
 			w,
 			errors.New("Only POST requests are allowed at this route"),
 			http.StatusMethodNotAllowed,
@@ -131,21 +143,21 @@ func CreateMembersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	orgname, err := getQueryParam(r, "org")
+	orgname, err := httputil.GetQueryParam(r, "org")
 	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
+		httputil.LogAndWriteStatusBadRequest(w, err, function)
 		return
 	}
 
 	err = r.ParseMultipartForm(MaxMemory)
 	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
+		httputil.LogAndWriteStatusBadRequest(w, err, function)
 		return
 	}
 
 	formFile, handler, err := r.FormFile("members")
 	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
+		httputil.LogAndWriteStatusBadRequest(w, err, function)
 		return
 	}
 
@@ -155,20 +167,20 @@ func CreateMembersHandler(w http.ResponseWriter, r *http.Request) {
 
 	file, err := os.OpenFile(filename, FileFlag, ReadWritePermissions)
 	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
+		httputil.LogAndWriteStatusInternalServerError(w, err, function)
 		return
 	}
 	defer file.Close()
 
 	_, err = io.Copy(file, formFile)
 	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
+		httputil.LogAndWriteStatusInternalServerError(w, err, function)
 		return
 	}
 
-	members, err := createMembersFromCSV(orgname, filename)
+	members, err := CreateMembersFromCSV(h.DB, orgname, filename)
 	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
+		httputil.LogAndWriteStatusInternalServerError(w, err, function)
 		return
 	}
 
@@ -186,11 +198,11 @@ func CreateMembersHandler(w http.ResponseWriter, r *http.Request) {
 
 	bytes, err := json.Marshal(resp)
 	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
+		httputil.LogAndWriteStatusInternalServerError(w, err, function)
 		return
 	}
 
-	LogAndWrite(w, bytes, http.StatusCreated, function)
+	httputil.LogAndWrite(w, bytes, http.StatusCreated, function)
 }
 
 // isValidFormatCSV :
@@ -204,11 +216,13 @@ func isValidFormatCSV(headers []string) bool {
 	return false
 }
 
-func createMembersFromCSV(orgname string, filename string) ([]MemberResponse, error) {
+// CreateMembersFromCSV parses the CSV at filename and saves its members for orgname.
+func CreateMembersFromCSV(q db.Querier, orgname string, filename string) ([]MemberResponse, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return []MemberResponse{}, err
 	}
+	defer file.Close()
 
 	reader := csv.NewReader(bufio.NewReader(file))
 	members := []Member{}
@@ -266,7 +280,7 @@ func createMembersFromCSV(orgname string, filename string) ([]MemberResponse, er
 		}
 	}
 
-	err = saveMembersInDB(orgname, members)
+	err = SaveMembersInDB(q, orgname, members)
 	if err != nil {
 		return []MemberResponse{}, err
 	}
@@ -282,22 +296,18 @@ func createMembersFromCSV(orgname string, filename string) ([]MemberResponse, er
 	return membersJSON, nil
 }
 
+// SaveMembersInDB reconciles newMembers with the stored members of orgname.
+//
 // TODO: Use transactions!!! Current implementation is brittle since it does
 // rollback if insertion of multiple members fails halfway
-func saveMembersInDB(orgname string, newMembers []Member) error {
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
-	if err != nil {
-		return err
-	}
-
+func SaveMembersInDB(q db.Querier, orgname string, newMembers []Member) error {
 	newMembersMap := map[string]Member{}
 	for _, member := range newMembers {
 		newMembersMap[member.Email] = member
 	}
 
 	membersMap := map[string]Member{}
-	members, err := GetMembersFromDB(orgname, false)
+	members, err := GetMembersFromDB(q, orgname, false)
 	if err != nil {
 		return err
 	}
@@ -380,7 +390,7 @@ func saveMembersInDB(orgname string, newMembers []Member) error {
 		if _, ok := existingMemberEmails[member.Email]; !ok {
 			columns := "(organization, email, name, metadata, last_round_with, active)"
 			placeholders := "($1, $2, $3, $4, $5, $6)"
-			_, err = db.Exec(
+			_, err = q.Exec(
 				fmt.Sprintf(
 					"INSERT INTO members %s VALUES %s",
 					columns,
@@ -389,8 +399,8 @@ func saveMembersInDB(orgname string, newMembers []Member) error {
 				member.Organization,
 				member.Email,
 				member.Name,
-				server.JSONB(metadataBytes),
-				server.JSONB(lastRoundWithBytes),
+				db.JSONB(metadataBytes),
+				db.JSONB(lastRoundWithBytes),
 				true,
 			)
 
@@ -399,11 +409,13 @@ func saveMembersInDB(orgname string, newMembers []Member) error {
 			}
 			// Update existing member
 		} else {
-			_, err = db.Exec(
+			// NOTE: as in the original implementation, the error of this
+			// update is not checked.
+			_, err = q.Exec(
 				"UPDATE members SET name = $1, metadata = $2, last_round_with = $3, active = $4 WHERE organization = $5 AND email = $6",
 				member.Name,
-				server.JSONB(metadataBytes),
-				server.JSONB(lastRoundWithBytes),
+				db.JSONB(metadataBytes),
+				db.JSONB(lastRoundWithBytes),
 				true,
 				orgname,
 				member.Email,
@@ -414,7 +426,8 @@ func saveMembersInDB(orgname string, newMembers []Member) error {
 	// Deactivate member (note we don't delete member from the DB)
 	for email := range existingMemberEmails {
 		if _, ok := membersMap[email]; !ok {
-			_, err = db.Exec(
+			// NOTE: error intentionally unchecked, as in the original implementation
+			_, err = q.Exec(
 				"UPDATE members SET active = $1 WHERE organization = $2 AND email = $3",
 				false,
 				orgname,
@@ -426,8 +439,9 @@ func saveMembersInDB(orgname string, newMembers []Member) error {
 	return nil
 }
 
-func getActiveMembersFromDBAsMap(orgname string) ([]MemberResponse, error) {
-	members, err := GetMembersFromDB(orgname, true)
+// GetActiveMembersAsMap returns the active members of orgname as flat name/email/metadata maps.
+func GetActiveMembersAsMap(q db.Querier, orgname string) ([]MemberResponse, error) {
+	members, err := GetMembersFromDB(q, orgname, true)
 	if err != nil {
 		return []MemberResponse{}, err
 	}
@@ -443,8 +457,9 @@ func getActiveMembersFromDBAsMap(orgname string) ([]MemberResponse, error) {
 	return mapMembers, nil
 }
 
-func getActiveMembersFromDBInPairFormat(orgname string) ([]Member, error) {
-	members, err := GetMembersFromDB(orgname, true)
+// GetActiveMembersInPairFormat returns the active members of orgname with only name and email set.
+func GetActiveMembersInPairFormat(q db.Querier, orgname string) ([]Member, error) {
+	members, err := GetMembersFromDB(q, orgname, true)
 	if err != nil {
 		return []Member{}, err
 	}
@@ -460,27 +475,22 @@ func getActiveMembersFromDBInPairFormat(orgname string) ([]Member, error) {
 	return pairMembers, nil
 }
 
-// GetMembersFromDB : Placeholder
-func GetMembersFromDB(orgname string, onlyActive bool) ([]Member, error) {
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
-	if err != nil {
-		return []Member{}, err
-	}
-
+// GetMembersFromDB returns the members of orgname, optionally only the active ones.
+func GetMembersFromDB(q db.Querier, orgname string, onlyActive bool) ([]Member, error) {
 	members := []Member{}
 
-	rows, err := db.Query(
+	rows, err := q.Query(
 		"SELECT organization, name, email, metadata, last_round_with, active FROM members WHERE organization = $1 ORDER BY name",
 		orgname,
 	)
 	if err != nil {
 		return members, err
 	}
+	defer rows.Close()
 
 	for rows.Next() {
 		var organization, name, email string
-		var metadataJSON, lastRoundWithJSON server.JSONB
+		var metadataJSON, lastRoundWithJSON db.JSONB
 		var active bool
 		err := rows.Scan(&organization, &name, &email, &metadataJSON, &lastRoundWithJSON, &active)
 		if err != nil {
