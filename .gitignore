@@ -1,0 +1,24 @@
+# Go build and test artifacts
+/mealbot
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+go.work
+go.work.sum
+
+# Python tooling used by repository automation
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+
+# macOS metadata
+.DS_Store
