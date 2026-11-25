@@ -3,15 +3,27 @@ package main
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
+	"io"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/johnamadeo/mealbot/internal/app"
 )
 
+type executeFunc func(context.Context, []string) error
+
 func main() {
-	if err := app.Run(context.Background()); err != nil {
-		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("mealbot stopped", "error", err)
-		os.Exit(1)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	os.Exit(run(ctx, os.Args[1:], app.RunArgs, os.Stderr))
+}
+
+func run(ctx context.Context, args []string, execute executeFunc, stderr io.Writer) int {
+	if err := execute(ctx, args); err != nil {
+		_, _ = fmt.Fprint(stderr, err)
+		return 1
 	}
+	return 0
 }
