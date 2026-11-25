@@ -1,0 +1,22 @@
+# Go build artifacts
+/mealbot
+/bin/
+*.exe
+*.test
+*.out
+*.prof
+/vendor/
+
+# Python
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+.env
