@@ -64,7 +64,7 @@ func (h MemberHandlers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h MemberHandlers) Get(w http.ResponseWriter, r *http.Request) {
 	const function = "GetMembersHandler"
 	if r.Method != http.MethodGet {
-		h.responder.WriteError(w, errors.New("Only GET requests are allowed at this route"), http.StatusMethodNotAllowed, function)
+		h.responder.WriteError(w, errOnlyGETRequests, http.StatusMethodNotAllowed, function)
 		return
 	}
 	organization, err := QueryParam(r, "org")
@@ -115,7 +115,7 @@ func (h MemberHandlers) Get(w http.ResponseWriter, r *http.Request) {
 func (h MemberHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	const function = "CreateMembersHandler"
 	if r.Method != http.MethodPost {
-		h.responder.WriteError(w, errors.New("Only POST requests are allowed at this route"), http.StatusMethodNotAllowed, function)
+		h.responder.WriteError(w, errOnlyPOSTRequests, http.StatusMethodNotAllowed, function)
 		return
 	}
 	organization, err := QueryParam(r, "org")
@@ -179,13 +179,7 @@ func (h MemberHandlers) Create(w http.ResponseWriter, r *http.Request) {
 func memberResponses(members []store.Member) []MemberResponse {
 	response := make([]MemberResponse, 0, len(members))
 	for _, member := range members {
-		values := make(MemberResponse, len(member.Metadata)+2)
-		for key, value := range member.Metadata {
-			values[key] = value
-		}
-		values["name"] = member.Name
-		values["email"] = member.Email
-		response = append(response, values)
+		response = append(response, newMemberResponse(member.Name, member.Email, member.Metadata))
 	}
 	return response
 }
@@ -193,15 +187,19 @@ func memberResponses(members []store.Member) []MemberResponse {
 func memberInputResponses(members []store.MemberInput) []MemberResponse {
 	response := make([]MemberResponse, 0, len(members))
 	for _, member := range members {
-		values := make(MemberResponse, len(member.Metadata)+2)
-		for key, value := range member.Metadata {
-			values[key] = value
-		}
-		values["name"] = member.Name
-		values["email"] = member.Email
-		response = append(response, values)
+		response = append(response, newMemberResponse(member.Name, member.Email, member.Metadata))
 	}
 	return response
+}
+
+func newMemberResponse(name, email string, metadata map[string]string) MemberResponse {
+	values := make(MemberResponse, len(metadata)+2)
+	for key, value := range metadata {
+		values[key] = value
+	}
+	values["name"] = name
+	values["email"] = email
+	return values
 }
 
 func responseTraits(members []MemberResponse) []string {

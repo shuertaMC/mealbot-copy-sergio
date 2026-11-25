@@ -38,7 +38,7 @@ func (h RoundHandlers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		h.Remove(w, r)
 	default:
-		h.responder.WriteError(w, errors.New("Only POST and DELETE requests are allowed at this route"), http.StatusMethodNotAllowed, "RoundHandler")
+		h.responder.WriteError(w, errOnlyPOSTAndDELETERequests, http.StatusMethodNotAllowed, "RoundHandler")
 	}
 }
 
@@ -46,7 +46,7 @@ func (h RoundHandlers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h RoundHandlers) Get(w http.ResponseWriter, r *http.Request) {
 	const function = "GetRoundsHandler"
 	if r.Method != http.MethodGet {
-		h.responder.WriteError(w, errors.New("Only GET requests are allowed at this route"), http.StatusMethodNotAllowed, function)
+		h.responder.WriteError(w, errOnlyGETRequests, http.StatusMethodNotAllowed, function)
 		return
 	}
 	organization, err := QueryParam(r, "org")
@@ -75,7 +75,7 @@ func (h RoundHandlers) Get(w http.ResponseWriter, r *http.Request) {
 func (h RoundHandlers) Add(w http.ResponseWriter, r *http.Request) {
 	const function = "AddRoundHandler"
 	if r.Method != http.MethodPost {
-		h.responder.WriteError(w, errors.New("Only POST requests are allowed at this route"), http.StatusMethodNotAllowed, function)
+		h.responder.WriteError(w, errOnlyPOSTRequests, http.StatusMethodNotAllowed, function)
 		return
 	}
 	values, err := QueryParams(r, []string{"org", "round"})
@@ -100,7 +100,7 @@ func (h RoundHandlers) Add(w http.ResponseWriter, r *http.Request) {
 func (h RoundHandlers) Remove(w http.ResponseWriter, r *http.Request) {
 	const function = "RemoveRoundHandler"
 	if r.Method != http.MethodDelete {
-		h.responder.WriteError(w, errors.New("Only DELETE requests are allowed at this route"), http.StatusMethodNotAllowed, function)
+		h.responder.WriteError(w, errOnlyDELETERequests, http.StatusMethodNotAllowed, function)
 		return
 	}
 	values, err := QueryParams(r, []string{"org", "roundId"})
@@ -131,7 +131,7 @@ func (h RoundHandlers) Reschedule(w http.ResponseWriter, r *http.Request) {
 		// The legacy implementation uniquely wrote this method error as a raw
 		// body instead of a Message envelope.
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		_, _ = w.Write([]byte("Only POST requests are allowed at this route"))
+		_, _ = w.Write([]byte(errOnlyPOSTRequests.Error()))
 		return
 	}
 	values, err := QueryParams(r, []string{"org", "round", "roundId"})

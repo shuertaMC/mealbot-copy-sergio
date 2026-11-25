@@ -48,7 +48,7 @@ func NewPairHandlers(store PairStore, responder Responder) PairHandlers {
 func (h PairHandlers) Get(w http.ResponseWriter, r *http.Request) {
 	const function = "GetPairsHandler"
 	if r.Method != http.MethodGet {
-		h.responder.WriteError(w, errors.New("Only GET requests are allowed at this route"), http.StatusMethodNotAllowed, function)
+		h.responder.WriteError(w, errOnlyGETRequests, http.StatusMethodNotAllowed, function)
 		return
 	}
 	organization, err := QueryParam(r, "org")

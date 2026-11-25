@@ -42,7 +42,7 @@ func NewOrganizationHandlers(store OrganizationStore, responder Responder) Organ
 func (h OrganizationHandlers) Organizations(w http.ResponseWriter, r *http.Request) {
 	const function = "GetOrganizationsHandler"
 	if r.Method != http.MethodGet && r.Method != "" {
-		h.responder.WriteError(w, errors.New("Only GET requests are allowed at this route"), http.StatusMethodNotAllowed, function)
+		h.responder.WriteError(w, errOnlyGETRequests, http.StatusMethodNotAllowed, function)
 		return
 	}
 
@@ -76,7 +76,7 @@ func (h OrganizationHandlers) Organizations(w http.ResponseWriter, r *http.Reque
 func (h OrganizationHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	const function = "CreateOrganizationHandler"
 	if r.Method != http.MethodPost {
-		h.responder.WriteError(w, errors.New("Only POST requests are allowed at this route"), http.StatusMethodNotAllowed, function)
+		h.responder.WriteError(w, errOnlyPOSTRequests, http.StatusMethodNotAllowed, function)
 		return
 	}
 
@@ -115,7 +115,7 @@ func (h OrganizationHandlers) Create(w http.ResponseWriter, r *http.Request) {
 func (h OrganizationHandlers) CrossMatchTrait(w http.ResponseWriter, r *http.Request) {
 	const function = "CrossMatchTraitHandler"
 	if r.Method != http.MethodPost {
-		h.responder.WriteError(w, errors.New("Only POST requests are allowed at this route"), http.StatusMethodNotAllowed, function)
+		h.responder.WriteError(w, errOnlyPOSTRequests, http.StatusMethodNotAllowed, function)
 		return
 	}
 	organization, err := QueryParam(r, "org")

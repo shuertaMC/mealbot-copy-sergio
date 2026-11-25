@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/johnamadeo/mealbot/internal/httpapi"
 )
 
 const (
@@ -14,8 +16,8 @@ const (
 	DefaultAuthIssuer         = "https://mealbot.auth0.com/"
 	DefaultAudience           = "https://mealbot-2.herokuapp.com/"
 	DefaultJWKSURL            = "https://mealbot.auth0.com/.well-known/jwks.json"
-	DefaultCORSAllowedHeaders = "Authorization, Content-Type, Origin, Accept, token"
-	DefaultCORSAllowedMethods = "GET, POST, DELETE"
+	DefaultCORSAllowedHeaders = httpapi.AllowedHeaders
+	DefaultCORSAllowedMethods = httpapi.AllowedMethods
 
 	CommandWeb     = "web"
 	CommandPair    = "pair"

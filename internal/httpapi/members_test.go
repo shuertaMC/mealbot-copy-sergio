@@ -96,6 +96,28 @@ func TestMemberGetSuccessEmptyAndOptionalTrait(t *testing.T) {
 	assertHandlerResponse(t, handlers.Get, http.MethodGet, "/members?org=empty", "", http.StatusOK, `{"members":[],"traits":[],"crossMatchTrait":""}`)
 }
 
+func TestNewMemberResponseCopiesMetadataAndPreservesIdentity(t *testing.T) {
+	metadata := map[string]string{
+		"cohort": "blue",
+		"name":   "metadata name",
+		"email":  "metadata@example.com",
+	}
+	got := newMemberResponse("Alice", "alice@example.com", metadata)
+	want := MemberResponse{
+		"cohort": "blue",
+		"name":   "Alice",
+		"email":  "alice@example.com",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("newMemberResponse() = %#v, want %#v", got, want)
+	}
+
+	got["cohort"] = "green"
+	if metadata["cohort"] != "blue" {
+		t.Fatalf("metadata mutated through response: %#v", metadata)
+	}
+}
+
 func TestMembersEndpointMethodRestrictions(t *testing.T) {
 	members := &fakeMemberStore{}
 	traits := &fakeTraitReader{}

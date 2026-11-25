@@ -2,8 +2,16 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+)
+
+var (
+	errOnlyGETRequests           = errors.New("Only GET requests are allowed at this route")
+	errOnlyPOSTRequests          = errors.New("Only POST requests are allowed at this route")
+	errOnlyDELETERequests        = errors.New("Only DELETE requests are allowed at this route")
+	errOnlyPOSTAndDELETERequests = errors.New("Only POST and DELETE requests are allowed at this route")
 )
 
 // Message is the legacy response envelope. The field deliberately has no JSON
