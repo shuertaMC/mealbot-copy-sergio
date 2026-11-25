@@ -3,14 +3,12 @@ package mealbot
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math/rand"
 	"os"
-	"strings"
 	"time"
 
+	"github.com/johnamadeo/mealbot/internal/mailer"
 	pairingdomain "github.com/johnamadeo/mealbot/internal/pairing"
-	mailgun "github.com/mailgun/mailgun-go"
 )
 
 const (
@@ -19,11 +17,11 @@ const (
 	// RecentRoundRange : max. no. of rounds between 2 pairings that is considered recent
 	RecentRoundRange = pairingdomain.RecentRoundRange
 	// EmailIntro : Text to put in the beginning of the email body
-	EmailIntro = "Your Mealbot group this week is:"
+	EmailIntro = mailer.EmailIntro
 	// EmailFooter : Text to put at the end of the email body
-	EmailFooter = "Feel free to reply all in this thread for scheduling. I'm a robot, so I can only read 1's and 0's.\n\n Sent by your friendly neighborhood Mealbot! Learn more about me at https://mealbot-web.herokuapp.com"
+	EmailFooter = mailer.EmailFooter
 	// EmailSubject : Subject of the email
-	EmailSubject = "Your new Mealbot group"
+	EmailSubject = mailer.EmailSubject
 )
 
 // Pair is retained as a compatibility alias while internal/pairing owns it.
@@ -147,30 +145,15 @@ func sendEmail(orgname string, toEmails []string, toNames []string) error {
 		return errors.New("environment variable MAILGUN_API_KEY not set")
 	}
 
-	from := fmt.Sprintf("%s Mealbot <%s>", orgname, smtpAddress)
-	text := fmt.Sprintf(
-		"%s \n%s\n\n %s",
-		EmailIntro,
-		strings.Join(toNames, "\r\n"),
-		EmailFooter,
-	)
-
-	mg := mailgun.NewMailgun(domain, apiKey)
-	message := mg.NewMessage(
-		from,
-		EmailSubject,
-		text,
-		toEmails...,
-	)
-
-	_, _, err := mg.Send(message)
-
+	notifier, err := mailer.New(mailer.Config{
+		Domain:    domain,
+		APIKey:    apiKey,
+		SMTPLogin: smtpAddress,
+	})
 	if err != nil {
 		return err
 	}
-
-	fmt.Println("Emails queued on Mailgun!")
-	return nil
+	return notifier.Notify(context.Background(), orgname, toEmails, toNames)
 }
 
 func runPairingScheduler(testMode bool) error {
