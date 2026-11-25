@@ -90,6 +90,14 @@ go build -o mealbot ./cmd/mealbot
 ./mealbot
 ```
 
+With the default `PORT=8080`, verify that the public static privacy page is served without authentication:
+
+```sh
+curl --fail --silent --show-error http://127.0.0.1:8080/privacy.html | grep -F '<title>Privacy Policy</title>'
+```
+
+Use the configured port in the URL when `PORT` is not `8080`. A successful command proves both an HTTP 2xx response and the expected privacy-page content.
+
 Process due rounds or reconstruct all organizations' pair history:
 
 ```sh
@@ -149,6 +157,14 @@ go test -count=1 -tags=integration ./...
 ```
 
 The integration suite resets that database, migrates from empty state, and exercises constraints, JSONB, reconciliation, rollback, round compaction, pair/triple history, due claims, and idempotent reconstruction. Auth tests generate local RSA keys and serve local JWKS responses; mail tests use an injected API and never call Mailgun.
+
+The pre-refactor `go test ./...` result captured before behavior moved into the modular packages is preserved in [`docs/baseline-test-result.md`](docs/baseline-test-result.md).
+
+## Dependency compatibility and security
+
+The milestone requested `github.com/mailgun/mailgun-go/v4` v4.21.1, but that tag was never published; v4.21.0 is the closest available v4.21 release. The module therefore uses Mailgun v4.21.0 and explicitly selects `github.com/go-chi/chi/v5` v5.5.0 instead of Mailgun's older transitive v5.1.0. This override is intentional: chi's [GO-2025-3770](https://pkg.go.dev/vuln/GO-2025-3770) is fixed from v5.2.2 onward.
+
+The requested `github.com/jackc/pgx/v5` v5.7.6 is not retained because [GO-2026-5004](https://pkg.go.dev/vuln/GO-2026-5004) was reachable in Mealbot through that version; the advisory is fixed from v5.9.2 onward. Mealbot uses pgx v5.13.0. These versions must not be downgraded to match unavailable or vulnerable milestone pins. The latest lifecycle `govulncheck ./...` gate, run `lifecycle-refresh-retry3`, exited successfully with `No vulnerabilities found.`; its raw result is recorded at `$MCODE_DIR/lifecycle/target/runs/lifecycle-refresh-retry3_govulncheck_result.json`.
 
 ## External services
 
