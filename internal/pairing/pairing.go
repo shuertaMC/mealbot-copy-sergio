@@ -1,15 +1,14 @@
-package main
+// Package pairing contains the pure pairing engine: the Pair, Round and
+// MembersMap types and RunPairingAlgorithm. It performs no database or email
+// I/O (see package rounds for that), and takes its randomness as a parameter so
+// that it can be tested deterministically.
+package pairing
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/rand"
-	"os"
 	"strings"
-
-	"github.com/johnamadeo/server"
-	mailgun "github.com/mailgun/mailgun-go"
 )
 
 const (
@@ -17,12 +16,6 @@ const (
 	MaxTries = 50
 	// RecentRoundRange : max. no. of rounds between 2 pairings that is considered recent
 	RecentRoundRange = 5
-	// EmailIntro : Text to put in the beginning of the email body
-	EmailIntro = "Your Mealbot group this week is:"
-	// EmailFooter : Text to put at the end of the email body
-	EmailFooter = "Feel free to reply all in this thread for scheduling. I'm a robot, so I can only read 1's and 0's.\n\n Sent by your friendly neighborhood Mealbot! Learn more about me at https://mealbot-web.herokuapp.com"
-	// EmailSubject : Subject of the email
-	EmailSubject = "Your new Mealbot group"
 )
 
 // Pair :
@@ -98,7 +91,7 @@ func (r Round) String() string {
 	return header + strings.Join(pairs, "\n") + "\n"
 }
 
-// MinimalMember : A pared down version of the Member struct (see members.go) for the pairing process
+// MinimalMember : A pared down version of the members.Member struct for the pairing process
 type MinimalMember struct {
 	ID            string
 	Name          string
@@ -128,9 +121,28 @@ func (mm MembersMap) String() string {
 	return str
 }
 
+// RandomIntGenerator returns a random int in [0, n). It matches the signature
+// of math/rand.Intn, which is the production default.
 type RandomIntGenerator func(int) int
 
-func runPairingAlgorithm(members MembersMap, roundNum int, genRandomInt RandomIntGenerator) (MembersMap, Round) {
+// DefaultRandomIntGenerator is the production random source.
+var DefaultRandomIntGenerator RandomIntGenerator = rand.Intn
+
+// NewSeededRandomIntGenerator returns a deterministic generator for the seed,
+// intended for tests.
+func NewSeededRandomIntGenerator(seed int64) RandomIntGenerator {
+	return rand.New(rand.NewSource(seed)).Intn
+}
+
+// RunPairingAlgorithm pairs up members for round roundNum and returns the
+// updated members (with LastRoundWith refreshed) and the resulting Round.
+// genRandomInt is the injectable random source; nil selects
+// DefaultRandomIntGenerator.
+func RunPairingAlgorithm(members MembersMap, roundNum int, genRandomInt RandomIntGenerator) (MembersMap, Round) {
+	if genRandomInt == nil {
+		genRandomInt = DefaultRandomIntGenerator
+	}
+
 	memberIds := []string{}
 	for id := range members {
 		memberIds = append(memberIds, id)
@@ -208,199 +220,6 @@ func runPairingAlgorithm(members MembersMap, roundNum int, genRandomInt RandomIn
 	return members, round
 }
 
-func runPairingRound(orgname string, roundNum int, testMode bool) error {
-	members, err := getMinimalMembersFromDB(orgname)
-	if err != nil {
-		return err
-	}
-
-	members, round := runPairingAlgorithm(members, roundNum, rand.Intn)
-
-	if !testMode {
-		err = sendEmails(orgname, round, members)
-		if err != nil {
-			return err
-		}
-	}
-
-	err = saveRoundInDB(round, members, orgname)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func sendEmails(orgname string, round Round, members MembersMap) error {
-	for pair := range round.Pairs {
-		toEmails := []string{pair.ID1, pair.ID2}
-		toNames := []string{members[pair.ID1].Name, members[pair.ID2].Name}
-
-		err := sendEmail(orgname, toEmails, toNames)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func selectRandomPartner(genRandomInt RandomIntGenerator, members []MinimalMember) MinimalMember {
 	return members[genRandomInt(len(members))]
-}
-
-func getMinimalMembersFromDB(orgname string) (MembersMap, error) {
-	crossMatchTrait, err := GetCrossMatchTrait(orgname)
-	if err != nil {
-		return MembersMap{}, err
-	}
-
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
-	if err != nil {
-		return MembersMap{}, err
-	}
-
-	minimalMembers := MembersMap{}
-	members, err := GetMembersFromDB(orgname, true)
-	if err != nil {
-		return MembersMap{}, err
-	}
-
-	for _, member := range members {
-		minimalMembers[member.Email] = MinimalMember{
-			ID:            member.Email,
-			Name:          member.Name,
-			Trait:         member.Metadata[crossMatchTrait],
-			LastRoundWith: member.LastRoundWith,
-		}
-	}
-
-	return minimalMembers, nil
-}
-
-func saveRoundInDB(round Round, members MembersMap, orgname string) error {
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
-	if err != nil {
-		return err
-	}
-
-	for pair := range round.Pairs {
-		columns := "(organization, id1, id2, extraId, round)"
-		placeholder := "($1, $2, $3, $4, $5)"
-
-		_, err := db.Exec(
-			fmt.Sprintf("INSERT INTO pairs %s VALUES %s", columns, placeholder),
-			orgname,
-			pair.ID1,
-			pair.ID2,
-			pair.ExtraID,
-			round.Number,
-		)
-
-		if err != nil {
-			return err
-		}
-	}
-
-	for _, member := range members {
-		bytes, err := json.Marshal(member.LastRoundWith)
-		if err != nil {
-			return err
-		}
-
-		_, err = db.Exec(
-			"UPDATE members SET last_round_with = $1 WHERE organization = $2 AND email = $3",
-			server.JSONB(bytes),
-			orgname,
-			member.ID,
-		)
-		if err != nil {
-			return err
-		}
-	}
-
-	_, err = db.Exec(
-		"UPDATE rounds SET done = $1 WHERE organization = $2 AND id = $3",
-		true,
-		orgname,
-		round.Number,
-	)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func sendEmail(orgname string, toEmails []string, toNames []string) error {
-	smtpAddress, ok := os.LookupEnv("MAILGUN_SMTP_LOGIN")
-	if !ok {
-		return errors.New("environment variable MAILGUN_SMTP_LOGIN not set")
-	}
-	domain, ok := os.LookupEnv("MAILGUN_DOMAIN")
-	if !ok {
-		return errors.New("environment variable MAILGUN_DOMAIN not set")
-	}
-	apiKey, ok := os.LookupEnv("MAILGUN_API_KEY")
-	if !ok {
-		return errors.New("environment variable MAILGUN_API_KEY not set")
-	}
-
-	from := fmt.Sprintf("%s Mealbot <%s>", orgname, smtpAddress)
-	text := fmt.Sprintf(
-		"%s \n%s\n\n %s",
-		EmailIntro,
-		strings.Join(toNames, "\r\n"),
-		EmailFooter,
-	)
-
-	mg := mailgun.NewMailgun(domain, apiKey)
-	message := mg.NewMessage(
-		from,
-		EmailSubject,
-		text,
-		toEmails...,
-	)
-
-	_, _, err := mg.Send(message)
-
-	if err != nil {
-		return err
-	}
-
-	fmt.Println("Emails queued on Mailgun!")
-	return nil
-}
-
-func runPairingScheduler(testMode bool) error {
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
-	if err != nil {
-		return err
-	}
-
-	rows, err := db.Query(
-		"SELECT organization, id FROM rounds WHERE scheduled_date < now() AT TIME ZONE 'utc' AND done = false",
-	)
-	if err != nil {
-		return err
-	}
-
-	for rows.Next() {
-		var orgname string
-		var roundNum int
-		err := rows.Scan(&orgname, &roundNum)
-		if err != nil {
-			return err
-		}
-
-		err = runPairingRound(orgname, roundNum, testMode)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }

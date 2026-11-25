@@ -1,4 +1,4 @@
-package main
+package pairing
 
 import (
 	"errors"
@@ -46,9 +46,9 @@ func TestRunPairingAlgorithmCorrectness(t *testing.T) {
 		t.Error(err)
 	}
 
-	runPairingAlgorithm(members, 0, randomIntGenerator)
-	runPairingAlgorithm(members, 1, randomIntGenerator)
-	runPairingAlgorithm(members, 2, randomIntGenerator)
+	RunPairingAlgorithm(members, 0, randomIntGenerator)
+	RunPairingAlgorithm(members, 1, randomIntGenerator)
+	RunPairingAlgorithm(members, 2, randomIntGenerator)
 }
 
 func TestPairingAlgorithmEndToEndTest(t *testing.T) {
