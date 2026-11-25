@@ -98,13 +98,9 @@ func (h *Handler) GetMembersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	traits := []string{}
-	if len(members) > 0 {
-		for trait := range members[0] {
-			if trait != "name" && trait != "email" {
-				traits = append(traits, trait)
-			}
-		}
+	traits := traitsOf(members)
+	if traits == nil {
+		traits = []string{}
 	}
 
 	crossMatchTrait, err := org.GetCrossMatchTrait(h.DB, orgname)
@@ -184,12 +180,7 @@ func (h *Handler) CreateMembersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var traits []string
-	for trait := range members[0] {
-		if trait != "name" && trait != "email" {
-			traits = append(traits, trait)
-		}
-	}
+	traits := traitsOf(members)
 
 	resp := CreateMembersResponse{
 		Members: members,
@@ -285,15 +276,7 @@ func CreateMembersFromCSV(q db.Querier, orgname string, filename string) ([]Memb
 		return []MemberResponse{}, err
 	}
 
-	var membersJSON []MemberResponse
-	for _, member := range members {
-		memberJSON := member.Metadata
-		memberJSON["name"] = member.Name
-		memberJSON["email"] = member.Email
-		membersJSON = append(membersJSON, memberJSON)
-	}
-
-	return membersJSON, nil
+	return flattenMembers(members), nil
 }
 
 // SaveMembersInDB reconciles newMembers with the stored members of orgname.
@@ -446,15 +429,7 @@ func GetActiveMembersAsMap(q db.Querier, orgname string) ([]MemberResponse, erro
 		return []MemberResponse{}, err
 	}
 
-	mapMembers := []MemberResponse{}
-	for _, member := range members {
-		mapMember := member.Metadata
-		mapMember["name"] = member.Name
-		mapMember["email"] = member.Email
-		mapMembers = append(mapMembers, mapMember)
-	}
-
-	return mapMembers, nil
+	return flattenMembers(members), nil
 }
 
 // GetActiveMembersInPairFormat returns the active members of orgname with only name and email set.
@@ -533,4 +508,31 @@ func GetMembersFromDB(q db.Querier, orgname string, onlyActive bool) ([]Member, 
 	}
 
 	return members, nil
+}
+
+// traitsOf returns the metadata keys of the first member, excluding name and
+// email. It returns nil when there are no members or no traits.
+func traitsOf(members []MemberResponse) []string {
+	var traits []string
+	if len(members) == 0 {
+		return traits
+	}
+	for trait := range members[0] {
+		if trait != "name" && trait != "email" {
+			traits = append(traits, trait)
+		}
+	}
+	return traits
+}
+
+// flattenMembers converts members to flat name/email/metadata maps.
+func flattenMembers(members []Member) []MemberResponse {
+	flat := []MemberResponse{}
+	for _, member := range members {
+		m := member.Metadata
+		m["name"] = member.Name
+		m["email"] = member.Email
+		flat = append(flat, m)
+	}
+	return flat
 }
