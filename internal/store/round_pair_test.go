@@ -245,15 +245,18 @@ func TestPairHistoryStopsAtGapAndPreservesNullAndEmptyExtraID(t *testing.T) {
 
 func TestSaveRoundRollsBackAtEveryStage(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		failSQL string
+		name          string
+		failSQL       string
+		zeroRowsSQL   string
+		wantOperation string
 	}{
-		{name: "pair", failSQL: "INSERT INTO pairs"},
-		{name: "history", failSQL: "SET last_round_with"},
-		{name: "done", failSQL: "SET done = TRUE"},
+		{name: "pair", failSQL: "INSERT INTO pairs", wantOperation: "insert pair"},
+		{name: "history execution", failSQL: "SET last_round_with", wantOperation: "update member history"},
+		{name: "history affected rows", zeroRowsSQL: "SET last_round_with", wantOperation: "update member history"},
+		{name: "done", failSQL: "SET done = TRUE", wantOperation: "mark round done"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			state := &driverState{failSQL: test.failSQL}
+			state := &driverState{failSQL: test.failSQL, zeroRowsSQL: test.zeroRowsSQL}
 			db := openDriverDB(state)
 			defer db.Close()
 			repository, _ := New(db)
@@ -263,8 +266,17 @@ func TestSaveRoundRollsBackAtEveryStage(t *testing.T) {
 				"a@example.com": {ID: "a@example.com", LastRoundWith: map[string]int{"b@example.com": 3}},
 				"b@example.com": {ID: "b@example.com", LastRoundWith: map[string]int{"a@example.com": 3}},
 			}
-			if err := repository.SaveRound(context.Background(), "org", round, members); err == nil {
+			err := repository.SaveRound(context.Background(), "org", round, members)
+			if err == nil {
 				t.Fatalf("SaveRound() succeeded at failing %s stage", test.name)
+			}
+			if !strings.Contains(err.Error(), test.wantOperation) {
+				t.Errorf("SaveRound() error = %q, want operation %q", err, test.wantOperation)
+			}
+			for _, memberID := range []string{"a@example.com", "b@example.com"} {
+				if strings.Contains(err.Error(), memberID) {
+					t.Errorf("SaveRound() error = %q, contains member identifier %q", err, memberID)
+				}
 			}
 			assertRollbackWithoutCommit(t, state)
 		})

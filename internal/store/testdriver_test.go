@@ -34,6 +34,7 @@ type driverState struct {
 	queryRowsErr  error
 	queryFixtures []queryFixture
 	failSQL       string
+	zeroRowsSQL   string
 	beginErr      error
 	commitErr     error
 	rollbackErr   error
@@ -98,6 +99,9 @@ func (c *testConn) ExecContext(_ context.Context, query string, args []driver.Na
 			checksum: args[2].Value.(string),
 		}
 		c.state.mu.Unlock()
+	}
+	if c.state.zeroRowsSQL != "" && strings.Contains(query, c.state.zeroRowsSQL) {
+		return driver.RowsAffected(0), nil
 	}
 	return driver.RowsAffected(1), nil
 }

@@ -153,14 +153,14 @@ func (s *Store) SaveRound(ctx context.Context, organization string, round pairin
 INSERT INTO pairs (organization, id1, id2, extraid, round)
 VALUES ($1, $2, $3, $4, $5)
 `, organization, pair.ID1, pair.ID2, pair.ExtraID, round.Number); err != nil {
-				return fmt.Errorf("insert pair %q/%q: %w", pair.ID1, pair.ID2, err)
+				return fmt.Errorf("insert pair: %w", err)
 			}
 		}
 
 		for _, memberID := range members.IDs() {
 			history, err := json.Marshal(members[memberID].LastRoundWith)
 			if err != nil {
-				return fmt.Errorf("encode history for member %q: %w", memberID, err)
+				return fmt.Errorf("encode member history: %w", err)
 			}
 			result, err := tx.ExecContext(opCtx, `
 UPDATE members
@@ -168,9 +168,9 @@ SET last_round_with = $1
 WHERE organization = $2 AND email = $3
 `, string(history), organization, memberID)
 			if err != nil {
-				return fmt.Errorf("update history for member %q: %w", memberID, err)
+				return fmt.Errorf("update member history: %w", err)
 			}
-			if err := requireOneRow(result, "update history for member "+memberID); err != nil {
+			if err := requireOneRow(result, "update member history"); err != nil {
 				return err
 			}
 		}
