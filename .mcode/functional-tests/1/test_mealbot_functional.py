@@ -9,7 +9,6 @@ import ssl
 import subprocess
 import threading
 import time
-import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path

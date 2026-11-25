@@ -47,7 +47,7 @@ func TestComposedPostgreSQLJourney(t *testing.T) {
 		}
 		const keyID = "composed-integration-key"
 		var jwksRequests atomic.Int32
-		jwksServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jwksServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			jwksRequests.Add(1)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]any{{
