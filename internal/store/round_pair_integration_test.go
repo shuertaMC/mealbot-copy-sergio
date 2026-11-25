@@ -215,6 +215,96 @@ INSERT INTO pairs (organization, id1, id2, extraid, round) VALUES ('history', $1
 	})
 }
 
+func TestPairHistoryPostgreSQLResolvesOnlyActiveMembers(t *testing.T) {
+	withIsolatedIntegrationDB(t, func(ctx context.Context, db *sql.DB) {
+		repository := migratedStore(t, ctx, db)
+		seedOrganizationAndMembers(t, ctx, db, "active-history",
+			"a@example.com",
+			"b@example.com",
+			"c@example.com",
+			"d@example.com",
+			"active-extra@example.com",
+			"inactive-extra@example.com",
+		)
+		if _, err := db.ExecContext(ctx, `
+UPDATE members
+SET active = FALSE
+WHERE organization = 'active-history'
+  AND email IN ('c@example.com', 'd@example.com', 'inactive-extra@example.com')
+`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+INSERT INTO rounds (organization, id, scheduled_date, done)
+VALUES ('active-history', 0, CURRENT_TIMESTAMP, TRUE)
+`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+INSERT INTO pairs (organization, id1, id2, extraid, round) VALUES
+('active-history', 'a@example.com', 'b@example.com', NULL, 0),
+('active-history', 'a@example.com', 'b@example.com', '', 0),
+('active-history', 'a@example.com', 'b@example.com', 'active-extra@example.com', 0),
+('active-history', 'a@example.com', 'b@example.com', 'inactive-extra@example.com', 0),
+('active-history', 'a@example.com', 'b@example.com', 'missing@example.com', 0),
+('active-history', 'a@example.com', 'c@example.com', NULL, 0),
+('active-history', 'd@example.com', 'b@example.com', NULL, 0)
+`); err != nil {
+			t.Fatal(err)
+		}
+
+		grouped, err := repository.PairHistory(ctx, "active-history")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(grouped) != 1 || len(grouped[0]) != 7 {
+			t.Fatalf("PairHistory() = %#v, want seven preserved round-zero pairs", grouped)
+		}
+		pairs := grouped[0]
+		if pairs[0].Member1.Email != "a@example.com" || pairs[0].Member2.Email != "b@example.com" {
+			t.Fatalf("active pair = %#v", pairs[0])
+		}
+		if pairs[2].ExtraMember == nil || pairs[2].ExtraMember.Email != "active-extra@example.com" {
+			t.Fatalf("active extra = %#v", pairs[2].ExtraMember)
+		}
+		if pairs[3].ExtraMember != nil || pairs[4].ExtraMember != nil {
+			t.Fatalf("inactive/missing extras = %#v/%#v, want nil", pairs[3].ExtraMember, pairs[4].ExtraMember)
+		}
+		if !reflect.DeepEqual(pairs[5].Member2, Member{}) {
+			t.Fatalf("inactive id2 = %#v, want zero value", pairs[5].Member2)
+		}
+		if !reflect.DeepEqual(pairs[6].Member1, Member{}) {
+			t.Fatalf("inactive id1 = %#v, want zero value", pairs[6].Member1)
+		}
+		if pairs[0].ExtraID != nil || pairs[1].ExtraID == nil || *pairs[1].ExtraID != "" {
+			t.Fatalf("NULL/empty ExtraID distinction changed: %#v/%#v", pairs[0].ExtraID, pairs[1].ExtraID)
+		}
+
+		if _, err := db.ExecContext(ctx, `
+UPDATE members
+SET active = TRUE
+WHERE organization = 'active-history'
+  AND email IN ('c@example.com', 'd@example.com', 'inactive-extra@example.com')
+`); err != nil {
+			t.Fatal(err)
+		}
+		grouped, err = repository.PairHistory(ctx, "active-history")
+		if err != nil {
+			t.Fatal(err)
+		}
+		pairs = grouped[0]
+		if pairs[3].ExtraMember == nil || pairs[3].ExtraMember.Email != "inactive-extra@example.com" {
+			t.Fatalf("reactivated extra = %#v", pairs[3].ExtraMember)
+		}
+		if pairs[4].ExtraMember != nil {
+			t.Fatalf("missing extra resolved unexpectedly: %#v", pairs[4].ExtraMember)
+		}
+		if pairs[5].Member2.Email != "c@example.com" || pairs[6].Member1.Email != "d@example.com" {
+			t.Fatalf("reactivated members = %#v/%#v", pairs[5].Member2, pairs[6].Member1)
+		}
+	})
+}
+
 func TestSaveRoundPostgreSQLRollsBackEveryStage(t *testing.T) {
 	for _, stage := range []string{"pair", "history", "done"} {
 		stage := stage

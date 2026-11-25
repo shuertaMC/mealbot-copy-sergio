@@ -10,9 +10,11 @@ import (
 	"github.com/johnamadeo/mealbot/internal/pairing"
 )
 
-// HistoricalPair is one stored pair joined to its persisted member records.
+// HistoricalPair is one stored pair resolved through the active-member view
+// used by the legacy history endpoint. A stored inactive or missing member ID
+// leaves the corresponding Member at its zero value without removing the pair.
 // ExtraID distinguishes SQL NULL from a present empty string; ExtraMember is
-// nil when the optional ID is NULL, empty, or no longer resolves to a member.
+// nil when the optional ID is NULL, empty, inactive, or unresolved.
 type HistoricalPair struct {
 	Member1     Member
 	Member2     Member
@@ -63,12 +65,12 @@ SELECT p.round, p.extraid,
        m2.organization, m2.email, m2.name, m2.metadata, m2.last_round_with, m2.active,
        m3.organization, m3.email, m3.name, m3.metadata, m3.last_round_with, m3.active
 FROM pairs AS p
-JOIN members AS m1
-  ON m1.organization = p.organization AND m1.email = p.id1
-JOIN members AS m2
-  ON m2.organization = p.organization AND m2.email = p.id2
+LEFT JOIN members AS m1
+  ON m1.organization = p.organization AND m1.email = p.id1 AND m1.active = TRUE
+LEFT JOIN members AS m2
+  ON m2.organization = p.organization AND m2.email = p.id2 AND m2.active = TRUE
 LEFT JOIN members AS m3
-  ON m3.organization = p.organization AND m3.email = p.extraid
+  ON m3.organization = p.organization AND m3.email = p.extraid AND m3.active = TRUE
 WHERE p.organization = $1
 ORDER BY p.round, p.id1, p.id2, p.extraid NULLS FIRST
 `
@@ -80,43 +82,61 @@ type rowScanner interface {
 func scanHistoricalPair(row rowScanner) (int, HistoricalPair, error) {
 	var round int
 	var extraID sql.NullString
-	var first, second Member
-	var firstMetadata, firstHistory, secondMetadata, secondHistory []byte
-	var extraOrganization, extraEmail, extraName sql.NullString
-	var extraMetadata, extraHistory []byte
-	var extraActive sql.NullBool
+	var first, second, extra nullableMember
 	if err := row.Scan(
 		&round, &extraID,
-		&first.Organization, &first.Email, &first.Name, &firstMetadata, &firstHistory, &first.Active,
-		&second.Organization, &second.Email, &second.Name, &secondMetadata, &secondHistory, &second.Active,
-		&extraOrganization, &extraEmail, &extraName, &extraMetadata, &extraHistory, &extraActive,
+		&first.organization, &first.email, &first.name, &first.metadata, &first.history, &first.active,
+		&second.organization, &second.email, &second.name, &second.metadata, &second.history, &second.active,
+		&extra.organization, &extra.email, &extra.name, &extra.metadata, &extra.history, &extra.active,
 	); err != nil {
 		return 0, HistoricalPair{}, fmt.Errorf("scan pair history: %w", err)
 	}
-	if err := decodeMemberJSON(firstMetadata, firstHistory, &first); err != nil {
+	firstMember, err := first.resolve()
+	if err != nil {
 		return 0, HistoricalPair{}, fmt.Errorf("decode first pair member: %w", err)
 	}
-	if err := decodeMemberJSON(secondMetadata, secondHistory, &second); err != nil {
+	secondMember, err := second.resolve()
+	if err != nil {
 		return 0, HistoricalPair{}, fmt.Errorf("decode second pair member: %w", err)
 	}
-	pair := HistoricalPair{Member1: first, Member2: second}
+	pair := HistoricalPair{Member1: firstMember, Member2: secondMember}
 	if extraID.Valid {
 		value := extraID.String
 		pair.ExtraID = &value
 	}
-	if extraEmail.Valid {
-		extra := Member{
-			Organization: extraOrganization.String,
-			Email:        extraEmail.String,
-			Name:         extraName.String,
-			Active:       extraActive.Bool,
-		}
-		if err := decodeMemberJSON(extraMetadata, extraHistory, &extra); err != nil {
+	if extra.email.Valid {
+		extraMember, err := extra.resolve()
+		if err != nil {
 			return 0, HistoricalPair{}, fmt.Errorf("decode extra pair member: %w", err)
 		}
-		pair.ExtraMember = &extra
+		pair.ExtraMember = &extraMember
 	}
 	return round, pair, nil
+}
+
+type nullableMember struct {
+	organization sql.NullString
+	email        sql.NullString
+	name         sql.NullString
+	metadata     []byte
+	history      []byte
+	active       sql.NullBool
+}
+
+func (member nullableMember) resolve() (Member, error) {
+	if !member.email.Valid {
+		return Member{}, nil
+	}
+	resolved := Member{
+		Organization: member.organization.String,
+		Email:        member.email.String,
+		Name:         member.name.String,
+		Active:       member.active.Bool,
+	}
+	if err := decodeMemberJSON(member.metadata, member.history, &resolved); err != nil {
+		return Member{}, err
+	}
+	return resolved, nil
 }
 
 // SaveRound implements pairing.RoundStore. Pair insertion, every member

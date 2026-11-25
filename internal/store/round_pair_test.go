@@ -134,21 +134,30 @@ func TestPairHistoryStopsAtGapAndPreservesNullAndEmptyExtraID(t *testing.T) {
 		"organization", "email", "name", "metadata", "history", "active",
 		"organization", "email", "name", "metadata", "history", "active",
 	}
-	member := func(round int64, extra driver.Value, first, second string) []driver.Value {
+	activeMember := func(email, name string) []driver.Value {
+		return []driver.Value{"org", email, name, []byte(`{"trait":"active"}`), []byte(`{}`), true}
+	}
+	unresolvedMember := func() []driver.Value {
+		return []driver.Value{nil, nil, nil, nil, nil, nil}
+	}
+	member := func(round int64, extra driver.Value, first, second, optional []driver.Value) []driver.Value {
 		return []driver.Value{
 			round, extra,
-			"org", first, "First", []byte(`{"trait":"a"}`), []byte(`{}`), true,
-			"org", second, "Second", []byte(`{"trait":"b"}`), []byte(`{}`), true,
-			nil, nil, nil, nil, nil, nil,
+			first[0], first[1], first[2], first[3], first[4], first[5],
+			second[0], second[1], second[2], second[3], second[4], second[5],
+			optional[0], optional[1], optional[2], optional[3], optional[4], optional[5],
 		}
 	}
 	state := &driverState{queryFixtures: []queryFixture{{
 		contains: "FROM pairs AS p",
 		columns:  columns,
 		values: [][]driver.Value{
-			member(0, nil, "a@example.com", "b@example.com"),
-			member(0, "", "c@example.com", "d@example.com"),
-			member(2, nil, "a@example.com", "d@example.com"),
+			member(0, nil, activeMember("a@example.com", "A"), activeMember("b@example.com", "B"), unresolvedMember()),
+			member(0, "", unresolvedMember(), activeMember("b@example.com", "B"), unresolvedMember()),
+			member(0, "missing@example.com", activeMember("a@example.com", "A"), unresolvedMember(), unresolvedMember()),
+			member(0, "inactive@example.com", activeMember("a@example.com", "A"), activeMember("b@example.com", "B"), unresolvedMember()),
+			member(0, "extra@example.com", activeMember("a@example.com", "A"), activeMember("b@example.com", "B"), activeMember("extra@example.com", "Extra")),
+			member(2, nil, activeMember("a@example.com", "A"), activeMember("b@example.com", "B"), unresolvedMember()),
 		},
 	}}}
 	db := openDriverDB(state)
@@ -158,14 +167,33 @@ func TestPairHistoryStopsAtGapAndPreservesNullAndEmptyExtraID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(grouped) != 1 || len(grouped[0]) != 2 {
-		t.Fatalf("PairHistory() grouping = %#v, want only two round-zero pairs", grouped)
+	if len(grouped) != 1 || len(grouped[0]) != 5 {
+		t.Fatalf("PairHistory() grouping = %#v, want only five round-zero pairs", grouped)
 	}
 	if grouped[0][0].ExtraID != nil {
 		t.Fatalf("NULL extra ID = %#v, want nil", grouped[0][0].ExtraID)
 	}
 	if grouped[0][1].ExtraID == nil || *grouped[0][1].ExtraID != "" {
 		t.Fatalf("empty extra ID = %#v, want present empty string", grouped[0][1].ExtraID)
+	}
+	if !reflect.DeepEqual(grouped[0][1].Member1, Member{}) {
+		t.Fatalf("inactive first member = %#v, want zero value", grouped[0][1].Member1)
+	}
+	if !reflect.DeepEqual(grouped[0][2].Member2, Member{}) {
+		t.Fatalf("missing second member = %#v, want zero value", grouped[0][2].Member2)
+	}
+	if grouped[0][2].ExtraMember != nil || grouped[0][3].ExtraMember != nil {
+		t.Fatalf("missing/inactive extras = %#v/%#v, want nil", grouped[0][2].ExtraMember, grouped[0][3].ExtraMember)
+	}
+	if grouped[0][4].ExtraMember == nil || grouped[0][4].ExtraMember.Email != "extra@example.com" || !grouped[0][4].ExtraMember.Active {
+		t.Fatalf("active extra member = %#v", grouped[0][4].ExtraMember)
+	}
+	events := strings.Join(state.snapshot(), "\n")
+	if strings.Count(events, "active = TRUE") != 3 || strings.Count(events, "LEFT JOIN members") != 3 {
+		t.Fatalf("pair query does not resolve all participants through active left joins:\n%s", events)
+	}
+	if !strings.Contains(events, "ORDER BY p.round, p.id1, p.id2, p.extraid NULLS FIRST") {
+		t.Fatalf("pair query lost stable ordering:\n%s", events)
 	}
 }
 

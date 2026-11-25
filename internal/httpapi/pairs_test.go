@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/johnamadeo/mealbot/internal/store"
@@ -45,7 +46,7 @@ func TestPairHandlersExactMemberAndExtraMemberRepresentation(t *testing.T) {
 		Name:          "Extra",
 		Metadata:      map[string]string{"cohort": "2027"},
 		LastRoundWith: map[string]int{"first@example.com": 0},
-		Active:        false,
+		Active:        true,
 	}
 	first := store.Member{
 		Organization:  "alpha",
@@ -53,7 +54,7 @@ func TestPairHandlersExactMemberAndExtraMemberRepresentation(t *testing.T) {
 		Name:          "First",
 		Metadata:      map[string]string{"cohort": "2025", "team": "red"},
 		LastRoundWith: map[string]int{"second@example.com": 0},
-		Active:        false,
+		Active:        true,
 	}
 	second := store.Member{
 		Organization:  "alpha",
@@ -74,6 +75,24 @@ func TestPairHandlersExactMemberAndExtraMemberRepresentation(t *testing.T) {
 	assertPairHTTP(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=alpha", http.StatusOK, want, "")
 	if storeFake.organization != "alpha" {
 		t.Fatalf("organization = %q, want alpha", storeFake.organization)
+	}
+}
+
+func TestPairResponsesKeepZeroMembersForInactiveAndUnresolvedIDs(t *testing.T) {
+	inactiveExtraID := "inactive@example.com"
+	missingExtraID := "missing@example.com"
+	history := [][]store.HistoricalPair{{
+		{Member1: store.Member{}, Member2: store.Member{Email: "active@example.com", Active: true}, ExtraID: &inactiveExtraID},
+		{Member1: store.Member{Email: "active@example.com", Active: true}, Member2: store.Member{}, ExtraID: &missingExtraID},
+	}}
+
+	got := pairResponses(history)
+	want := [][]PairResponse{{
+		{Member1: PairMember{}, Member2: PairMember{Email: "active@example.com"}, ExtraMember: PairMember{}},
+		{Member1: PairMember{Email: "active@example.com"}, Member2: PairMember{}, ExtraMember: PairMember{}},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pairResponses() = %#v, want %#v", got, want)
 	}
 }
 
