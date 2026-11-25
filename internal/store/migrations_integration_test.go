@@ -160,8 +160,8 @@ VALUES ('test-org', 'member@example.com', 'Member', '{}'::jsonb, `+shape.history
 				if err := db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&ledgerCount); err != nil {
 					t.Fatal(err)
 				}
-				if ledgerCount != 3 {
-					t.Fatalf("ledger count = %d, want 3", ledgerCount)
+				if ledgerCount != 4 {
+					t.Fatalf("ledger count = %d, want 4", ledgerCount)
 				}
 				var organizationsExists, membersExists, roundsExists, pairsExists bool
 				if err := db.QueryRowContext(ctx, `
@@ -204,6 +204,164 @@ FROM members WHERE email = 'member@example.com'
 			})
 		})
 	}
+}
+
+func TestMigrationsPostgreSQLConvergesLegacyPairsIdentity(t *testing.T) {
+	withIsolatedIntegrationDB(t, func(ctx context.Context, db *sql.DB) {
+		if _, err := db.ExecContext(ctx, `
+CREATE TABLE organizations (
+    name VARCHAR PRIMARY KEY,
+    admin VARCHAR NOT NULL CHECK(length(admin) > 0),
+    cross_match_trait VARCHAR
+);
+CREATE TABLE members (
+    organization VARCHAR REFERENCES organizations(name),
+    email VARCHAR NOT NULL CHECK(length(email) > 0),
+    name VARCHAR NOT NULL CHECK(length(name) > 0),
+    metadata JSONB,
+    pair_counts JSONB NOT NULL,
+    active BOOLEAN NOT NULL,
+    PRIMARY KEY (organization, email)
+);
+CREATE TABLE rounds (
+    organization VARCHAR REFERENCES organizations(name),
+    id INTEGER NOT NULL CHECK (id >= 0),
+    scheduled_date TIMESTAMP NOT NULL,
+    done BOOLEAN NOT NULL,
+    PRIMARY KEY (organization, id)
+);
+CREATE TABLE pairs (
+    organization VARCHAR REFERENCES organizations(name),
+    id1 VARCHAR NOT NULL CHECK(length(id1) > 0),
+    id2 VARCHAR NOT NULL CHECK(length(id2) > 0),
+    extraId VARCHAR,
+    round INTEGER NOT NULL CHECK(round >= 0),
+    PRIMARY KEY (organization, id1, id2, extraId, round),
+    FOREIGN KEY (organization, round) REFERENCES rounds(organization, id),
+    FOREIGN KEY (organization, id1) REFERENCES members(organization, email),
+    FOREIGN KEY (organization, id2) REFERENCES members(organization, email)
+);
+INSERT INTO organizations (name, admin)
+VALUES ('test-org', 'admin@example.com');
+INSERT INTO members (organization, email, name, metadata, pair_counts, active)
+VALUES
+    ('test-org', 'first@example.com', 'First', '{}'::jsonb, '{}'::jsonb, TRUE),
+    ('test-org', 'second@example.com', 'Second', '{}'::jsonb, '{}'::jsonb, TRUE);
+INSERT INTO rounds (organization, id, scheduled_date, done)
+VALUES ('test-org', 0, TIMESTAMP '2026-01-01 00:00:00', TRUE);
+INSERT INTO pairs (organization, id1, id2, extraid, round)
+VALUES ('test-org', 'first@example.com', 'second@example.com', '', 0);
+`); err != nil {
+			t.Fatalf("create legacy pairs starting shape: %v", err)
+		}
+
+		migrator, err := NewMigrator(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := migrator.Apply(ctx); err != nil {
+			t.Fatalf("first Apply(): %v", err)
+		}
+		if err := migrator.Apply(ctx); err != nil {
+			t.Fatalf("second Apply(): %v", err)
+		}
+
+		var ledgerCount int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&ledgerCount); err != nil {
+			t.Fatal(err)
+		}
+		if ledgerCount != 4 {
+			t.Fatalf("ledger count = %d, want 4", ledgerCount)
+		}
+
+		var organization, id1, id2 string
+		var extraID sql.NullString
+		var round int
+		if err := db.QueryRowContext(ctx, `
+SELECT organization, id1, id2, extraid, round
+FROM pairs
+WHERE extraid = ''
+`).Scan(&organization, &id1, &id2, &extraID, &round); err != nil {
+			t.Fatalf("read preserved legacy pair: %v", err)
+		}
+		if organization != "test-org" || id1 != "first@example.com" || id2 != "second@example.com" || !extraID.Valid || extraID.String != "" || round != 0 {
+			t.Fatalf("preserved legacy pair = organization:%q id1:%q id2:%q extraid:%+v round:%d", organization, id1, id2, extraID, round)
+		}
+
+		var nullable string
+		if err := db.QueryRowContext(ctx, `
+SELECT is_nullable
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'pairs'
+  AND column_name = 'extraid'
+`).Scan(&nullable); err != nil {
+			t.Fatal(err)
+		}
+		if nullable != "YES" {
+			t.Fatalf("pairs.extraid is_nullable = %q, want YES", nullable)
+		}
+
+		var legacyPrimaryKeys int
+		if err := db.QueryRowContext(ctx, `
+SELECT count(*)
+FROM pg_constraint AS candidate
+INNER JOIN pg_class AS relation
+    ON relation.oid = candidate.conrelid
+INNER JOIN pg_namespace AS namespace
+    ON namespace.oid = relation.relnamespace
+WHERE namespace.nspname = current_schema()
+  AND relation.relname = 'pairs'
+  AND candidate.contype = 'p'
+  AND EXISTS (
+      SELECT 1
+      FROM unnest(candidate.conkey) AS key_column(attnum)
+      INNER JOIN pg_attribute AS attribute
+          ON attribute.attrelid = candidate.conrelid
+         AND attribute.attnum = key_column.attnum
+      WHERE attribute.attname = 'extraid'
+  )
+`).Scan(&legacyPrimaryKeys); err != nil {
+			t.Fatal(err)
+		}
+		if legacyPrimaryKeys != 0 {
+			t.Fatalf("primary keys containing extraid = %d, want 0", legacyPrimaryKeys)
+		}
+
+		var identityConstraintExists bool
+		if err := db.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM pg_constraint AS candidate
+    INNER JOIN pg_class AS relation
+        ON relation.oid = candidate.conrelid
+    INNER JOIN pg_namespace AS namespace
+        ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname = current_schema()
+      AND relation.relname = 'pairs'
+      AND candidate.conname = 'pairs_identity_unique'
+      AND candidate.contype = 'u'
+)
+`).Scan(&identityConstraintExists); err != nil {
+			t.Fatal(err)
+		}
+		if !identityConstraintExists {
+			t.Fatal("pairs_identity_unique constraint is missing")
+		}
+
+		if _, err := db.ExecContext(ctx, `
+INSERT INTO pairs (organization, id1, id2, extraid, round)
+VALUES ('test-org', 'first@example.com', 'second@example.com', NULL, 0)
+`); err != nil {
+			t.Fatalf("insert SQL NULL extraid alongside legacy empty extraid: %v", err)
+		}
+		if _, err := db.ExecContext(ctx, `
+INSERT INTO pairs (organization, id1, id2, extraid, round)
+VALUES ('test-org', 'first@example.com', 'second@example.com', NULL, 0)
+`); err == nil {
+			t.Fatal("duplicate SQL NULL pair identity was accepted")
+		}
+	})
 }
 
 func historyColumnList(shape string) string {

@@ -59,10 +59,15 @@ func TestCheckedInMigrationAssetsDefineCompatibleNonDestructiveSchema(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 3 {
-		t.Fatalf("migration count = %d, want 3", len(migrations))
+	if len(migrations) != 4 {
+		t.Fatalf("migration count = %d, want 4", len(migrations))
 	}
-	combined := strings.ToLower(migrations[0].SQL + migrations[1].SQL + migrations[2].SQL)
+	var combinedBuilder strings.Builder
+	for _, migration := range migrations {
+		combinedBuilder.WriteString(migration.SQL)
+		combinedBuilder.WriteByte('\n')
+	}
+	combined := strings.ToLower(combinedBuilder.String())
 	for _, required := range []string{
 		"create table if not exists organizations",
 		"create table if not exists members",
@@ -78,6 +83,15 @@ func TestCheckedInMigrationAssetsDefineCompatibleNonDestructiveSchema(t *testing
 	}
 	if strings.Contains(combined, "drop table") {
 		t.Error("migration assets contain destructive DROP TABLE")
+	}
+	pairsConvergence := strings.ToLower(migrations[3].SQL)
+	for _, required := range []string{
+		"alter column extraid drop not null",
+		"unique nulls not distinct (organization, id1, id2, extraid, round)",
+	} {
+		if !strings.Contains(pairsConvergence, required) {
+			t.Errorf("pairs convergence migration does not contain %q", required)
+		}
 	}
 }
 
