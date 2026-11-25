@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -278,6 +279,36 @@ func TestMigrateExecutesOrderedLedgerTransactions(t *testing.T) {
 	}
 	if err := repository.Migrate(context.Background()); err != nil {
 		t.Fatalf("Migrate: %v", err)
+	}
+}
+
+func TestConstraintsMigrationCanonicalizesBeforePrimaryKey(t *testing.T) {
+	t.Parallel()
+	entries, err := migrationEntries()
+	if err != nil {
+		t.Fatalf("migrationEntries: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("migration count = %d, want 3", len(entries))
+	}
+	migration := entries[2].sql
+	markers := []string{
+		"ALTER TABLE pairs DROP CONSTRAINT IF EXISTS pairs_pkey",
+		"CREATE TEMPORARY TABLE mealbot_canonical_pairs ON COMMIT DROP AS",
+		"SELECT DISTINCT",
+		"unnest(ARRAY[pairs.id1, pairs.id2, pairs.extra_id])",
+		"DELETE FROM pairs",
+		"INSERT INTO pairs (organization, round, id1, id2, extra_id)",
+		"ALTER TABLE pairs ADD CONSTRAINT pairs_pkey",
+		"ALTER TABLE pairs ADD CONSTRAINT pairs_canonical_order_check",
+	}
+	position := -1
+	for _, marker := range markers {
+		next := strings.Index(migration, marker)
+		if next <= position {
+			t.Fatalf("migration marker %q at %d, want after %d", marker, next, position)
+		}
+		position = next
 	}
 }
 

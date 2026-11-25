@@ -12,6 +12,35 @@ ALTER TABLE pairs DROP CONSTRAINT IF EXISTS pairs_extra_id_fkey;
 ALTER TABLE pairs DROP CONSTRAINT IF EXISTS pairs_pkey;
 UPDATE pairs SET extra_id = NULL WHERE extra_id = '';
 ALTER TABLE pairs ALTER COLUMN extra_id DROP NOT NULL;
+
+-- Legacy schemas canonicalized only id1/id2, so a triple could store its
+-- smallest member in extra_id.  Stage the complete canonical member sets
+-- before rewriting: updating rows in place can violate the legacy primary key
+-- when two permutations describe the same logical group.  DISTINCT retains
+-- exactly one copy of each equivalent pair/triple while preserving its
+-- organization and round.
+CREATE TEMPORARY TABLE mealbot_canonical_pairs ON COMMIT DROP AS
+SELECT DISTINCT
+    pairs.organization,
+    pairs.round,
+    canonical.member_ids[1] AS id1,
+    canonical.member_ids[2] AS id2,
+    CASE WHEN cardinality(canonical.member_ids) = 3
+         THEN canonical.member_ids[3]
+         ELSE NULL
+    END AS extra_id
+FROM pairs
+CROSS JOIN LATERAL (
+    SELECT array_agg(member_id ORDER BY member_id) AS member_ids
+    FROM unnest(ARRAY[pairs.id1, pairs.id2, pairs.extra_id]) AS member(member_id)
+    WHERE member_id IS NOT NULL
+) AS canonical;
+
+DELETE FROM pairs;
+INSERT INTO pairs (organization, round, id1, id2, extra_id)
+SELECT organization, round, id1, id2, extra_id
+FROM mealbot_canonical_pairs;
+
 ALTER TABLE pairs ADD CONSTRAINT pairs_pkey PRIMARY KEY (organization, round, id1, id2);
 
 ALTER TABLE members ADD CONSTRAINT members_organization_fkey

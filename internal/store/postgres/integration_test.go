@@ -257,17 +257,60 @@ func TestLegacyPairCountsMigration(t *testing.T) {
 			round integer, PRIMARY KEY (organization,id1,id2,extraId,round));
 		INSERT INTO organizations VALUES ('legacy', 'admin', NULL);
 		INSERT INTO members VALUES ('legacy','a@example.test','A','{"team":"red"}',
-			'{"b@example.test":2}',true)`); err != nil {
+			'{"b@example.test":2}',true),
+			('legacy','b@example.test','B','{}','{}',true),
+			('legacy','c@example.test','C','{}','{}',true);
+		INSERT INTO rounds VALUES ('legacy', 0, '2026-11-25 10:00:00', true);
+		INSERT INTO pairs VALUES
+			('legacy','b@example.test','c@example.test','a@example.test',0),
+			('legacy','a@example.test','c@example.test','b@example.test',0),
+			('legacy','a@example.test','b@example.test','c@example.test',0)`); err != nil {
 		t.Fatalf("create legacy schema: %v", err)
 	}
 	repository, _ := New(db)
 	if err := repository.Migrate(ctx); err != nil {
 		t.Fatalf("migrate legacy schema: %v", err)
 	}
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatalf("idempotent legacy migration: %v", err)
+	}
 	members, err := repository.ListMembers(ctx, "legacy", false)
-	if err != nil || len(members) != 1 || members[0].LastRoundWith["b@example.test"] != 2 || members[0].Metadata["team"] != "red" {
+	if err != nil || len(members) != 3 || members[0].LastRoundWith["b@example.test"] != 2 || members[0].Metadata["team"] != "red" {
 		t.Fatalf("legacy member after migration = %#v, %v", members, err)
 	}
+
+	var id1, id2 string
+	var extraID sql.NullString
+	var retained int
+	if err := db.QueryRowContext(ctx, `
+		SELECT MIN(id1), MIN(id2), MIN(extra_id), COUNT(*)
+		FROM pairs WHERE organization = 'legacy' AND round = 0`,
+	).Scan(&id1, &id2, &extraID, &retained); err != nil {
+		t.Fatalf("read canonicalized legacy triple: %v", err)
+	}
+	if retained != 1 || id1 != "a@example.test" || id2 != "b@example.test" ||
+		!extraID.Valid || extraID.String != "c@example.test" {
+		t.Fatalf("canonicalized legacy triple = (%q,%q,%q) count %d", id1, id2, extraID.String, retained)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE pairs SET id1 = 'b@example.test', id2 = 'c@example.test', extra_id = 'a@example.test'
+		WHERE organization = 'legacy' AND round = 0`); err == nil {
+		t.Fatal("canonical order constraint accepted a non-canonical legacy triple")
+	}
+	historical, err := repository.ListHistoricalPairs(ctx, "legacy")
+	if err != nil || len(historical) != 1 || len(historical[0].Pairs) != 1 || historical[0].Pairs[0].ExtraMember == nil {
+		t.Fatalf("canonicalized legacy history = %#v, %v", historical, err)
+	}
+	if err := repository.ReconstructOrganizationHistory(ctx, "legacy"); err != nil {
+		t.Fatalf("reconstruct canonicalized legacy history: %v", err)
+	}
+	members, err = repository.ListMembers(ctx, "legacy", false)
+	if err != nil {
+		t.Fatalf("read reconstructed legacy members: %v", err)
+	}
+	assertSymmetricRound(t, members, "a@example.test", "b@example.test", 0)
+	assertSymmetricRound(t, members, "a@example.test", "c@example.test", 0)
+	assertSymmetricRound(t, members, "b@example.test", "c@example.test", 0)
 }
 
 func integrationMember(t *testing.T, organization, email, name string, metadata map[string]string) domain.Member {
