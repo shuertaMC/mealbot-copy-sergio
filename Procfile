@@ -1,1 +1,1 @@
-web: mealbot
+web: bin/mealbot
