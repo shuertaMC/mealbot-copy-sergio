@@ -69,6 +69,52 @@ func TestRescheduleRoundRollsBackFailure(t *testing.T) {
 	assertRollbackWithoutCommit(t, state)
 }
 
+func TestMissingOrganizationRoundMutationsCommitNoOp(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Store) error
+	}{
+		{
+			name: "reschedule",
+			mutate: func(repository *Store) error {
+				return repository.RescheduleRound(context.Background(), "missing", "2026-01-01", 2)
+			},
+		},
+		{
+			name: "delete",
+			mutate: func(repository *Store) error {
+				return repository.DeleteRound(context.Background(), "missing", 2)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := &driverState{queryFixtures: []queryFixture{{
+				contains: "SELECT name FROM organizations",
+				columns:  []string{"name"},
+			}}}
+			db := openDriverDB(state)
+			defer db.Close()
+			repository, _ := New(db)
+
+			if err := test.mutate(repository); err != nil {
+				t.Fatalf("mutation returned error for missing organization: %v", err)
+			}
+
+			events := state.snapshot()
+			if len(events) != 3 || events[0] != "begin" || !strings.Contains(events[1], "SELECT name FROM organizations") || events[2] != "commit" {
+				t.Fatalf("mutation events = %#v, want only begin, organization lock lookup, commit", events)
+			}
+			for _, unexpected := range []string{"exec:", "SELECT id, scheduled_date, done"} {
+				if strings.Contains(strings.Join(events, "\n"), unexpected) {
+					t.Fatalf("mutation continued after empty organization lock lookup:\n%s", strings.Join(events, "\n"))
+				}
+			}
+		})
+	}
+}
+
 func TestDeleteRoundRenumberFailureRollsBack(t *testing.T) {
 	state := &driverState{
 		failSQL: "UPDATE pairs",

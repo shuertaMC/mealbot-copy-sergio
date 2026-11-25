@@ -490,6 +490,31 @@ class TestRoundsAndPairing:
         assert listed.json() == {"rounds": ["2031-02-03 13:14:15Z", "2030-01-03 12:00:00Z"]}
         assert _psql(f"SELECT string_agg(id::text, ',' ORDER BY id) FROM rounds WHERE organization='{org}'") == "0,1"
 
+    def test_missing_organization_round_mutations_are_successful_noops(self, api):
+        org = f"ftrun_missing_rounds_{uuid.uuid4().hex[:8]}"
+        changed = api.post(
+            f"{BASE_URL}/round",
+            params={"org": org, "round": "2031-02-03 13:14:15Z", "roundId": "1"},
+            timeout=10,
+        )
+        removed = api.delete(f"{BASE_URL}/round", params={"org": org, "roundId": "1"}, timeout=10)
+        _evidence(
+            "test_missing_organization_round_mutations_are_successful_noops",
+            output=json.dumps(
+                {
+                    "reschedule": {"status": changed.status_code, "body": changed.text},
+                    "delete": {"status": removed.status_code, "body": removed.text},
+                },
+                sort_keys=True,
+            ),
+            status=removed.status_code,
+        )
+        assert (changed.status_code, changed.text) == (
+            200,
+            '{"Message":"Succesfully changed date of the round"}',
+        )
+        assert (removed.status_code, removed.text) == (200, '{"Message":"Successfully removed round"}')
+
     def test_pair_cli_delivers_then_persists_and_exposes_history(self, api, org_factory, mailgun_proxy_factory):
         org = org_factory("pairsuccess")
         uploaded = _upload(

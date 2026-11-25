@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -90,6 +92,9 @@ func (s *Store) RescheduleRound(ctx context.Context, organization, scheduled str
 	defer cancel()
 	return s.WithinTransaction(opCtx, func(tx DBTX) error {
 		if err := lockOrganization(opCtx, tx, organization); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
 			return err
 		}
 		if _, err := tx.ExecContext(opCtx, `
@@ -119,6 +124,9 @@ func (s *Store) DeleteRound(ctx context.Context, organization string, roundID in
 	defer cancel()
 	return s.WithinTransaction(opCtx, func(tx DBTX) error {
 		if err := lockOrganization(opCtx, tx, organization); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
 			return err
 		}
 		rows, err := tx.QueryContext(opCtx, `
