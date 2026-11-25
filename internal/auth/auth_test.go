@@ -13,14 +13,25 @@ import (
 )
 
 func TestBearerTokenValidatesPresenceAndFormat(t *testing.T) {
-	for _, header := range []string{"", "Basic token", "Bearer", "Bearer one two", "token"} {
+	for _, header := range []string{
+		"",
+		"Basic token",
+		"Bearer",
+		"Bearer one two",
+		"token",
+		"  BEARER   token  ",
+		"Bearer  token",
+		"Bearer\ttoken",
+		" Bearer token",
+		"Bearer token ",
+	} {
 		t.Run(header, func(t *testing.T) {
 			if _, err := BearerToken(header); !errors.Is(err, ErrUnauthorized) {
 				t.Fatalf("BearerToken(%q) = %v, want ErrUnauthorized", header, err)
 			}
 		})
 	}
-	for _, header := range []string{"Bearer token", "bearer token", "  BEARER   token  "} {
+	for _, header := range []string{"Bearer token", "bearer token"} {
 		t.Run(header, func(t *testing.T) {
 			got, err := BearerToken(header)
 			if err != nil || got != "token" {
@@ -65,6 +76,8 @@ func TestHTTPMiddlewarePreservesLegacyRejectionAndValidPassThroughContracts(t *t
 		{name: "missing credential"},
 		{name: "malformed scheme", header: "Basic token"},
 		{name: "malformed bearer", header: "Bearer"},
+		{name: "repeated space", header: "Bearer  " + valid},
+		{name: "tab separator", header: "Bearer\t" + valid},
 		{name: "invalid signature", header: "Bearer " + invalidSignature},
 		{name: "valid token", header: "Bearer " + valid, wantCalled: true},
 	}

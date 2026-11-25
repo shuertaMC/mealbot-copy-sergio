@@ -33,14 +33,15 @@ type TokenValidator interface {
 	Validate(context.Context, string) error
 }
 
-// BearerToken extracts a single bearer credential. Its errors intentionally do
-// not distinguish missing, malformed, and empty credentials.
+// BearerToken extracts a bearer credential separated from its scheme by one
+// literal space. Its errors intentionally do not distinguish missing,
+// malformed, and empty credentials.
 func BearerToken(header string) (string, error) {
-	fields := strings.Fields(header)
-	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") || fields[1] == "" {
+	parts := strings.Split(header, " ")
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
 		return "", ErrUnauthorized
 	}
-	return fields[1], nil
+	return parts[1], nil
 }
 
 // HTTPMiddleware applies a TokenValidator to requests.
