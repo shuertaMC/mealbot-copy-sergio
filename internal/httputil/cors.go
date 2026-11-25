@@ -1,4 +1,6 @@
-package main
+// Package httputil holds the HTTP helpers shared by all handler packages:
+// middleware chaining, CORS, query-parameter helpers and logging/response writers.
+package httputil
 
 import (
 	"net/http"
