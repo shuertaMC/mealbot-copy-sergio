@@ -1,44 +1,39 @@
-DROP TABLE pairs;
-DROP TABLE rounds;
-DROP TABLE members;
-DROP TABLE organizations;
+-- Compatibility bootstrap for fresh databases. Production deployments should
+-- use the ordered runner and SQL assets in migrations/ so versions and
+-- checksums are recorded. This file is intentionally non-destructive.
 
-CREATE TABLE organizations (
+CREATE TABLE IF NOT EXISTS organizations (
     name VARCHAR PRIMARY KEY,
-    admin VARCHAR NOT NULL CHECK(length(admin) > 0),
+    admin VARCHAR NOT NULL CHECK (length(admin) > 0),
     cross_match_trait VARCHAR
 );
 
-CREATE TABLE members (
-    organization VARCHAR REFERENCES organizations(name),
-    email VARCHAR NOT NULL CHECK(length(email) > 0),
-    name VARCHAR NOT NULL CHECK(length(name) > 0),
-    metadata JSONB,
-    pair_counts JSONB NOT NULL,
-    active BOOLEAN NOT NULL,
+CREATE TABLE IF NOT EXISTS members (
+    organization VARCHAR NOT NULL REFERENCES organizations(name),
+    email VARCHAR NOT NULL CHECK (length(email) > 0),
+    name VARCHAR NOT NULL CHECK (length(name) > 0),
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    last_round_with JSONB NOT NULL DEFAULT '{}'::jsonb,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (organization, email)
 );
 
-CREATE TABLE rounds (
-    organization VARCHAR REFERENCES organizations(name),
+CREATE TABLE IF NOT EXISTS rounds (
+    organization VARCHAR NOT NULL REFERENCES organizations(name),
     id INTEGER NOT NULL CHECK (id >= 0),
-    -- round dates are stored in UTC with accuracy up to seconds
-    -- when retrieved, it is formatted as a string in 'YYYY-MM-DDTHH:mm:ssZ',
-    -- the trailing Z indicating that that the datestring should be parsed 
-    -- as UTC time (& converted into local time if a client library wants to
-    -- do so e.g moment.js)
-    scheduled_date TIMESTAMP NOT NULL,
-    done BOOLEAN NOT NULL,
+    scheduled_date TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    done BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (organization, id)
 );
 
-CREATE TABLE pairs (
-    organization VARCHAR REFERENCES organizations(name),
-    id1 VARCHAR NOT NULL CHECK(length(id1) > 0),
-    id2 VARCHAR NOT NULL CHECK(length(id2) > 0),
-    extraId VARCHAR,
-    round INTEGER NOT NULL CHECK(round >= 0),
-    PRIMARY KEY (organization, id1, id2, extraId, round),
+CREATE TABLE IF NOT EXISTS pairs (
+    organization VARCHAR NOT NULL REFERENCES organizations(name),
+    id1 VARCHAR NOT NULL CHECK (length(id1) > 0),
+    id2 VARCHAR NOT NULL CHECK (length(id2) > 0),
+    extraid VARCHAR,
+    round INTEGER NOT NULL CHECK (round >= 0),
+    CONSTRAINT pairs_identity_unique
+        UNIQUE NULLS NOT DISTINCT (organization, id1, id2, extraid, round),
     FOREIGN KEY (organization, round) REFERENCES rounds(organization, id),
     FOREIGN KEY (organization, id1) REFERENCES members(organization, email),
     FOREIGN KEY (organization, id2) REFERENCES members(organization, email)
