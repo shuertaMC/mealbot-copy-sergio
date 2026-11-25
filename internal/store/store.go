@@ -27,15 +27,6 @@ func New(db *sql.DB, operationTimeout ...time.Duration) (*Store, error) {
 	return &Store{db: db, operationTimeout: timeout}, nil
 }
 
-// DB exposes the injected handle for composition code sharing the pool with
-// the migration runner.
-func (s *Store) DB() *sql.DB {
-	if s == nil {
-		return nil
-	}
-	return s.db
-}
-
 func (s *Store) operationContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()

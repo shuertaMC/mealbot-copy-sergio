@@ -123,16 +123,6 @@ func NewMigratorFromFS(db *sql.DB, fsys fs.FS, options ...MigrationOptions) (*Mi
 	return &Migrator{db: db, migrations: loaded, timeout: timeout}, nil
 }
 
-// Migrations returns a copy of the ordered migration metadata.
-func (m *Migrator) Migrations() []Migration {
-	if m == nil {
-		return nil
-	}
-	result := make([]Migration, len(m.migrations))
-	copy(result, m.migrations)
-	return result
-}
-
 // Apply creates the ledger and applies each outstanding migration in its own
 // transaction. An advisory transaction lock serializes competing runners.
 func (m *Migrator) Apply(ctx context.Context) error {

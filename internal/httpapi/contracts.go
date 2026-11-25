@@ -42,15 +42,6 @@ type PairStore interface {
 	PairHistory(context.Context, string) ([][]store.HistoricalPair, error)
 }
 
-// Dependencies groups the narrow route-owned contracts without forcing later
-// handlers to depend on the concrete PostgreSQL adapter.
-type Dependencies struct {
-	Organizations OrganizationStore
-	Members       MemberStore
-	Rounds        RoundStore
-	Pairs         PairStore
-}
-
 var (
 	_ OrganizationStore     = (*store.Store)(nil)
 	_ MemberStore           = (*store.Store)(nil)

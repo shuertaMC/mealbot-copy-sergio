@@ -13,8 +13,3 @@ type DBTX interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
-
-// Transactor executes a callback atomically.
-type Transactor interface {
-	WithinTransaction(context.Context, func(DBTX) error) error
-}
