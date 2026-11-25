@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import socket
 import socketserver
 import ssl
@@ -12,12 +13,13 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 import pytest
 import requests
@@ -37,6 +39,59 @@ DATABASE_URL = os.environ.get(
 EVIDENCE_DIR = Path(os.environ.get("FT_EVIDENCE_DIR", Path(tempfile.gettempdir()) / "mealbot-ft-evidence"))
 ALLOWED_ORIGIN = "https://allowed.example"
 AUDIENCE = "mealbot-functional"
+
+
+def _database_name(database_url: str) -> str:
+    if not database_url:
+        raise ValueError("DATABASE_URL must be a non-empty PostgreSQL URL")
+    try:
+        parsed = urlsplit(database_url)
+    except ValueError as error:
+        raise ValueError("DATABASE_URL must be a valid PostgreSQL URL") from error
+    if parsed.scheme.lower() not in {"postgres", "postgresql"}:
+        raise ValueError("DATABASE_URL must use the postgres or postgresql scheme")
+    if parsed.fragment:
+        raise ValueError("DATABASE_URL must not contain a fragment")
+    if any(key.casefold() == "dbname" for key, _value in parse_qsl(parsed.query, keep_blank_values=True)):
+        raise ValueError("DATABASE_URL must select its database in the URL path, not a dbname query parameter")
+    if not parsed.path.startswith("/") or len(parsed.path) == 1:
+        raise ValueError("DATABASE_URL must select a database in its URL path")
+    encoded_name = parsed.path[1:]
+    if re.search(r"%(?![0-9A-Fa-f]{2})", encoded_name):
+        raise ValueError("DATABASE_URL database name contains invalid percent encoding")
+    database_name = unquote(encoded_name)
+    if not database_name or "\x00" in database_name:
+        raise ValueError("DATABASE_URL must select a valid database name")
+    return database_name
+
+
+def _validated_test_database_name(database_url: str) -> str:
+    database_name = _database_name(database_url)
+    if "test" not in database_name.casefold():
+        raise ValueError(
+            f"refusing destructive functional test against database {database_name!r}: "
+            "name must contain test"
+        )
+    return database_name
+
+
+def _database_url_with_name(database_url: str, database_name: str) -> str:
+    _database_name(database_url)
+    if "test" not in database_name.casefold() or "\x00" in database_name:
+        raise ValueError("replacement database name must be a disposable name containing test")
+    parsed = urlsplit(database_url)
+    return urlunsplit(parsed._replace(path="/" + quote(database_name, safe="")))
+
+
+def _legacy_database_name(base_database_name: str) -> str:
+    safe_base = re.sub(r"[^a-z0-9_]+", "_", base_database_name.casefold()).strip("_")
+    return f"{(safe_base or 'mealbot')[:32]}_legacy_test_{uuid.uuid4().hex[:12]}"
+
+
+def _quote_identifier(identifier: str) -> str:
+    if not identifier or "\x00" in identifier:
+        raise ValueError("PostgreSQL identifier must be non-empty and contain no NUL bytes")
+    return '"' + identifier.replace('"', '""') + '"'
 
 
 def _free_port() -> int:
@@ -73,9 +128,19 @@ def _run(
 
 
 def _psql(sql: str, database_url: str = DATABASE_URL) -> str:
+    _validated_test_database_name(database_url)
     result = _run(
         ["psql", database_url, "-v", "ON_ERROR_STOP=1", "-At"],
         input_text=sql,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def _admin_psql(sql: str, admin_url: str) -> str:
+    _database_name(admin_url)
+    result = _run(
+        ["psql", admin_url, "-v", "ON_ERROR_STOP=1", "-At", "-c", sql],
     )
     assert result.returncode == 0, result.stderr
     return result.stdout
@@ -265,8 +330,72 @@ def _signed_token(private_key: Path, issuer: str) -> str:
     return f"{header}.{payload}.{_b64url(signature)}"
 
 
+@pytest.fixture
+def without_runtime() -> None:
+    """Allow pure safety tests to run without starting Mealbot or PostgreSQL."""
+
+
+@pytest.mark.parametrize(
+    ("database_url", "expected_name"),
+    [
+        ("postgresql://tester:secret@db.example/mealbot_test", "mealbot_test"),
+        ("postgres://tester@localhost/MealBot_TEST?sslmode=disable", "MealBot_TEST"),
+        (
+            "postgresql:///mealbot_test?host=%2Fvar%2Frun%2Fpostgresql",
+            "mealbot_test",
+        ),
+        (
+            "postgresql://cloud-user@/mealbot%5Ftest?host=/cloudsql/project:zone:instance",
+            "mealbot_test",
+        ),
+    ],
+)
+def test_database_url_validation_accepts_disposable_variants(
+    without_runtime: None,
+    database_url: str,
+    expected_name: str,
+) -> None:
+    assert _validated_test_database_name(database_url) == expected_name
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "",
+        "localhost/mealbot_test",
+        "mysql://tester@localhost/mealbot_test",
+        "postgresql://tester@localhost/postgres",
+        "postgresql://tester@localhost/mealbot",
+        "postgresql://tester@localhost/mealbot_test?dbname=production",
+        "postgresql://tester@localhost/mealbot_test%ZZ",
+    ],
+)
+def test_database_url_validation_rejects_unsafe_variants(
+    without_runtime: None,
+    database_url: str,
+) -> None:
+    with pytest.raises(ValueError):
+        _validated_test_database_name(database_url)
+
+
+def test_database_url_validation_preserves_connection_settings_when_rewriting(
+    without_runtime: None,
+) -> None:
+    admin_url = "postgresql://admin:secret@db.example/postgres?sslmode=require&host=/cloudsql/db"
+    rewritten = _database_url_with_name(admin_url, "mealbot_legacy_test_a1b2")
+    parsed = urlsplit(rewritten)
+    assert parsed.scheme == "postgresql"
+    assert parsed.netloc == "admin:secret@db.example"
+    assert parsed.path == "/mealbot_legacy_test_a1b2"
+    assert parsed.query == "sslmode=require&host=/cloudsql/db"
+    assert _validated_test_database_name(rewritten) == "mealbot_legacy_test_a1b2"
+    with pytest.raises(ValueError):
+        _database_url_with_name(admin_url, "production")
+
+
 @pytest.fixture(scope="session")
 def runtime() -> Runtime:
+    _validated_test_database_name(DATABASE_URL)
     assert BINARY.is_file(), f"Mealbot binary not found: {BINARY}"
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
     for old in EVIDENCE_DIR.glob("*.json"):
@@ -361,7 +490,10 @@ def runtime() -> Runtime:
 
 
 @pytest.fixture(autouse=True)
-def health_check(runtime: Runtime) -> None:
+def health_check(request: pytest.FixtureRequest) -> None:
+    if "without_runtime" in request.fixturenames:
+        return
+    runtime = request.getfixturevalue("runtime")
     response = requests.get(f"{runtime.base_url}/privacy.html", timeout=5)
     assert response.status_code == 200
 
@@ -854,13 +986,26 @@ class TestCLI:
         assert result.stderr == "argument 'invalid' not recognized"
 
     def test_cli_migrate_legacy_triples(self, runtime: Runtime) -> None:
-        database = "mealbot_legacy_ft_test"
-        legacy_url = f"postgresql://morphagent@localhost/{database}?host=/var/run/postgresql"
-        drop_before = _run(["sudo", "-u", "postgres", "dropdb", "--if-exists", "--force", database])
-        assert drop_before.returncode == 0, drop_before.stderr
-        created = _run(["sudo", "-u", "postgres", "createdb", "--owner=morphagent", database])
-        assert created.returncode == 0, created.stderr
+        admin_url = os.environ.get("POSTGRES_ADMIN_URL", "").strip()
+        if not admin_url:
+            pytest.skip(
+                "legacy migration provisioning requires POSTGRES_ADMIN_URL with CREATE/DROP DATABASE privileges"
+            )
+        base_database = _validated_test_database_name(DATABASE_URL)
+        database = _legacy_database_name(base_database)
+        legacy_url = _database_url_with_name(DATABASE_URL, database)
+        admin_legacy_url = _database_url_with_name(admin_url, database)
+        owner = _psql("SELECT current_user;").strip()
+        _admin_psql(f"CREATE DATABASE {_quote_identifier(database)};", admin_url)
         try:
+            _admin_psql(
+                f"GRANT CONNECT ON DATABASE {_quote_identifier(database)} TO {_quote_identifier(owner)};",
+                admin_url,
+            )
+            _admin_psql(
+                f"GRANT USAGE, CREATE ON SCHEMA public TO {_quote_identifier(owner)};",
+                admin_legacy_url,
+            )
             _psql(
                 """
                 CREATE TABLE organizations (name text PRIMARY KEY, admin text NOT NULL, cross_match_trait text);
@@ -910,5 +1055,4 @@ class TestCLI:
             ).strip()
             assert symmetric == "0|0"
         finally:
-            dropped = _run(["sudo", "-u", "postgres", "dropdb", "--if-exists", "--force", database])
-            assert dropped.returncode == 0, dropped.stderr
+            _admin_psql(f"DROP DATABASE IF EXISTS {_quote_identifier(database)};", admin_url)
