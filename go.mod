@@ -14,7 +14,7 @@ require (
 	github.com/johnamadeo/server v0.0.0-20181223122326-3cd1bc6d2320
 	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
 	github.com/mailgun/mailgun-go v2.0.0+incompatible
-	github.com/mailgun/mailgun-go/v4 v4.21.1
+	github.com/mailgun/mailgun-go/v4 v4.21.0
 	github.com/sirupsen/logrus v1.4.2
 	github.com/smartystreets/goconvey v1.7.2 // indirect
 	github.com/stretchr/testify v1.4.0 // indirect
