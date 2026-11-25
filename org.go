@@ -1,13 +1,12 @@
 package mealbot
 
 import (
+	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io/ioutil"
 	"net/http"
 
+	"github.com/johnamadeo/mealbot/internal/httpapi"
 	"github.com/johnamadeo/server"
 )
 
@@ -18,151 +17,55 @@ type Organization struct {
 	CrossMatchTrait string
 }
 
-// CreateOrganizationRequestBody :
-type CreateOrganizationRequestBody struct {
-	Organization string `json:"org"`
-}
-
-// SetCrossMatchTraitRequestBody :
-type SetCrossMatchTraitRequestBody struct {
-	Trait string `json:"trait"`
-}
-
 var getOrganizationsForHandler = getOrganizations
 var createOrganizationForHandler = createOrganization
 var setCrossMatchTraitForHandler = setCrossMatchTrait
 
+type legacyOrganizationHTTPStore struct{}
+
+func (legacyOrganizationHTTPStore) OrganizationsByAdmin(_ context.Context, admin string) ([]string, error) {
+	return getOrganizationsForHandler(admin)
+}
+
+func (legacyOrganizationHTTPStore) CreateOrganization(_ context.Context, name, admin string) error {
+	return createOrganizationForHandler(name, admin)
+}
+
+func (legacyOrganizationHTTPStore) CrossMatchTrait(_ context.Context, organization string) (*string, error) {
+	trait, err := getCrossMatchTraitForHandler(organization)
+	if err != nil {
+		return nil, err
+	}
+	// The legacy database function collapses SQL NULL to an empty string, so
+	// this bridge keeps the field present for compatibility.
+	return &trait, nil
+}
+
+func (legacyOrganizationHTTPStore) SetCrossMatchTrait(_ context.Context, organization string, trait *string) error {
+	value := ""
+	if trait != nil {
+		value = *trait
+	}
+	return setCrossMatchTraitForHandler(organization, value)
+}
+
+func legacyOrganizationHandlers() httpapi.OrganizationHandlers {
+	return httpapi.NewOrganizationHandlers(legacyOrganizationHTTPStore{}, legacyResponder)
+}
+
 // GetOrganizationsHandler : HTTP Handler for fetching all the organizations an admin manages
 func GetOrganizationsHandler(w http.ResponseWriter, r *http.Request) {
-	function := "GetOrganizationsHandler"
-	if r.Method != "GET" && r.Method != "" {
-		LogAndWriteErr(
-			w,
-			errors.New("Only GET requests are allowed at this route"),
-			http.StatusMethodNotAllowed,
-			function,
-		)
-		return
-	}
-
-	queries, ok := r.URL.Query()["admin"]
-	if !ok || len(queries) > 1 {
-		LogAndWriteErr(
-			w,
-			errors.New("request query parameters must contain 'admin'"),
-			http.StatusBadRequest,
-			function,
-		)
-		return
-	}
-
-	organizations, err := getOrganizationsForHandler(queries[0])
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	resp := map[string][]string{"orgs": organizations}
-	bytes, err := json.Marshal(resp)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	LogAndWrite(w, bytes, http.StatusOK, function)
+	legacyOrganizationHandlers().Organizations(w, r)
 }
 
 // CreateOrganizationHandler : HTTP handler for creating a new organization
 func CreateOrganizationHandler(w http.ResponseWriter, r *http.Request) {
-	function := "CreateOrganizationHandler"
-	if r.Method != "POST" {
-		LogAndWriteErr(
-			w,
-			errors.New("Only POST requests are allowed at this route"),
-			http.StatusMethodNotAllowed,
-			function,
-		)
-		return
-	}
-
-	bytes, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-	defer r.Body.Close()
-
-	var body CreateOrganizationRequestBody
-	err = json.Unmarshal(bytes, &body)
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-
-	queries, ok := r.URL.Query()["admin"]
-	if !ok || len(queries) > 1 {
-		LogAndWriteErr(
-			w,
-			errors.New("request query parameters must contain 'admin'"),
-			http.StatusBadRequest,
-			function,
-		)
-		return
-	}
-	admin := queries[0]
-
-	fmt.Println(body.Organization, admin)
-
-	err = createOrganizationForHandler(body.Organization, admin)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	LogAndWrite(
-		w,
-		server.StrToBytes("Successfully created new organization"),
-		http.StatusCreated,
-		function,
-	)
+	legacyOrganizationHandlers().Create(w, r)
 }
 
 // CrossMatchTraitHandler : HTTP handler for changing or setting a cross match trait for an organization
 func CrossMatchTraitHandler(w http.ResponseWriter, r *http.Request) {
-	function := "CrossMatchTraitHandler"
-	if r.Method != "POST" {
-		LogAndWriteErr(w, errors.New("Only POST requests are allowed at this route"), http.StatusMethodNotAllowed, function)
-		return
-	}
-
-	orgname, err := getQueryParam(r, "org")
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-
-	bytes, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		LogAndWriteErr(w, errors.New("Malformed body."), http.StatusBadRequest, function)
-		return
-	}
-	defer r.Body.Close()
-
-	var body SetCrossMatchTraitRequestBody
-	err = json.Unmarshal(bytes, &body)
-	if err != nil {
-		LogAndWriteErr(w, errors.New("Request body is malformed"), http.StatusBadRequest, function)
-		return
-	}
-
-	err = setCrossMatchTraitForHandler(orgname, body.Trait)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write(server.ErrToBytes(err))
-		return
-	}
-
-	LogAndWrite(w, server.StrToBytes("Successfully set the cross match trait"), http.StatusCreated, function)
+	legacyOrganizationHandlers().CrossMatchTrait(w, r)
 }
 
 // GetOrganizations :

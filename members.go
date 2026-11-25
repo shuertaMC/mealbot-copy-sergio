@@ -2,6 +2,7 @@ package mealbot
 
 import (
 	"bufio"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/johnamadeo/mealbot/internal/httpapi"
+	internalstore "github.com/johnamadeo/mealbot/internal/store"
 	"github.com/johnamadeo/server"
 )
 
@@ -35,21 +38,9 @@ type Member struct {
 	LastRoundWith map[string]int
 }
 
-// MemberResponse : Data structure for representing a member
-type MemberResponse map[string]string
-
-// CreateMembersResponse :
-type CreateMembersResponse struct {
-	Members []MemberResponse `json:"members"`
-	Traits  []string         `json:"traits"`
-}
-
-// GetMembersResponse :
-type GetMembersResponse struct {
-	Members         []MemberResponse `json:"members"`
-	Traits          []string         `json:"traits"`
-	CrossMatchTrait string           `json:"crossMatchTrait"`
-}
+// MemberResponse is retained as an alias for legacy persistence helpers and
+// tests while the transport DTO is owned by internal/httpapi.
+type MemberResponse = httpapi.MemberResponse
 
 // Handler dependency seams keep the legacy HTTP contract testable without a
 // live database. They deliberately default to the original implementations.
@@ -57,146 +48,114 @@ var getActiveMembersForHandler = getActiveMembersFromDBAsMap
 var getCrossMatchTraitForHandler = GetCrossMatchTrait
 var createMembersFromCSVForHandler = createMembersFromCSV
 
+type legacyMemberHTTPStore struct{}
+
+func (legacyMemberHTTPStore) Members(_ context.Context, organization string, onlyActive bool) ([]internalstore.Member, error) {
+	if onlyActive {
+		responses, err := getActiveMembersForHandler(organization)
+		if err != nil {
+			return nil, err
+		}
+		members := make([]internalstore.Member, 0, len(responses))
+		for _, response := range responses {
+			metadata := make(map[string]string, len(response))
+			for key, value := range response {
+				if key != "name" && key != "email" {
+					metadata[key] = value
+				}
+			}
+			members = append(members, internalstore.Member{
+				Organization: organization,
+				Name:         response["name"],
+				Email:        response["email"],
+				Metadata:     metadata,
+				Active:       true,
+			})
+		}
+		return members, nil
+	}
+	legacyMembers, err := GetMembersFromDB(organization, false)
+	if err != nil {
+		return nil, err
+	}
+	members := make([]internalstore.Member, 0, len(legacyMembers))
+	for _, member := range legacyMembers {
+		members = append(members, internalstore.Member{
+			Organization:  member.Organization,
+			Email:         member.Email,
+			Name:          member.Name,
+			Metadata:      member.Metadata,
+			LastRoundWith: member.LastRoundWith,
+			Active:        true,
+		})
+	}
+	return members, nil
+}
+
+func (legacyMemberHTTPStore) SynchronizeMembersCSV(_ context.Context, organization string, source io.Reader) (internalstore.MemberSyncPlan, error) {
+	filename := "members.csv"
+	if upload, ok := source.(interface{ UploadFilename() string }); ok {
+		if base := filepath.Base(upload.UploadFilename()); base != "." && base != string(filepath.Separator) && base != "" {
+			filename = base
+		}
+	}
+	temporaryDirectory, err := os.MkdirTemp("", "mealbot-members-upload-")
+	if err != nil {
+		return internalstore.MemberSyncPlan{}, err
+	}
+	defer os.RemoveAll(temporaryDirectory)
+	path := filepath.Join(temporaryDirectory, filename)
+	file, err := os.Create(path)
+	if err != nil {
+		return internalstore.MemberSyncPlan{}, err
+	}
+	if _, err := io.Copy(file, source); err != nil {
+		_ = file.Close()
+		return internalstore.MemberSyncPlan{}, err
+	}
+	if err := file.Close(); err != nil {
+		return internalstore.MemberSyncPlan{}, err
+	}
+
+	responses, err := createMembersFromCSVForHandler(organization, path)
+	if err != nil {
+		return internalstore.MemberSyncPlan{}, err
+	}
+	members := make([]internalstore.MemberInput, 0, len(responses))
+	for _, response := range responses {
+		metadata := make(map[string]string, len(response))
+		for key, value := range response {
+			if key != "name" && key != "email" {
+				metadata[key] = value
+			}
+		}
+		members = append(members, internalstore.MemberInput{
+			Name:     response["name"],
+			Email:    response["email"],
+			Metadata: metadata,
+		})
+	}
+	return internalstore.MemberSyncPlan{Organization: organization, Members: members}, nil
+}
+
+func legacyMemberHandlers() httpapi.MemberHandlers {
+	return httpapi.NewMemberHandlers(legacyMemberHTTPStore{}, legacyOrganizationHTTPStore{}, legacyResponder)
+}
+
 // MembersHandler : Combined handlers for create and retrieving members
 func MembersHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
-		CreateMembersHandler(w, r)
-	} else if r.Method == "GET" {
-		GetMembersHandler(w, r)
-	}
+	legacyMemberHandlers().ServeHTTP(w, r)
 }
 
 // GetMembersHandler : HTTP handler for retrieving members
 func GetMembersHandler(w http.ResponseWriter, r *http.Request) {
-	function := "GetMembersHandler"
-	if r.Method != "GET" {
-		LogAndWriteErr(
-			w,
-			errors.New("Only GET requests are allowed at this route"),
-			http.StatusMethodNotAllowed,
-			function,
-		)
-		return
-	}
-
-	orgname, err := getQueryParam(r, "org")
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-
-	members, err := getActiveMembersForHandler(orgname)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	traits := []string{}
-	if len(members) > 0 {
-		for trait := range members[0] {
-			if trait != "name" && trait != "email" {
-				traits = append(traits, trait)
-			}
-		}
-	}
-
-	crossMatchTrait, err := getCrossMatchTraitForHandler(orgname)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	resp := GetMembersResponse{
-		Members: members,
-		Traits:  traits,
-	}
-	if crossMatchTrait != "" {
-		resp.CrossMatchTrait = crossMatchTrait
-	}
-
-	bytes, err := json.Marshal(resp)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	LogAndWrite(w, bytes, http.StatusOK, function)
+	legacyMemberHandlers().Get(w, r)
 }
 
 // TODO: The problem is here!
 // CreateMembersHandler : HTTP handler for creating members
 func CreateMembersHandler(w http.ResponseWriter, r *http.Request) {
-	function := "CreateMembersHandler"
-	if r.Method != "POST" {
-		LogAndWriteErr(
-			w,
-			errors.New("Only POST requests are allowed at this route"),
-			http.StatusMethodNotAllowed,
-			function,
-		)
-		return
-	}
-
-	orgname, err := getQueryParam(r, "org")
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-
-	err = r.ParseMultipartForm(MaxMemory)
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-
-	formFile, handler, err := r.FormFile("members")
-	if err != nil {
-		LogAndWriteStatusBadRequest(w, err, function)
-		return
-	}
-
-	defer formFile.Close()
-
-	filename := filepath.Join(CSVPath, handler.Filename)
-
-	file, err := os.OpenFile(filename, FileFlag, ReadWritePermissions)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-	defer file.Close()
-
-	_, err = io.Copy(file, formFile)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	members, err := createMembersFromCSVForHandler(orgname, filename)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	var traits []string
-	for trait := range members[0] {
-		if trait != "name" && trait != "email" {
-			traits = append(traits, trait)
-		}
-	}
-
-	resp := CreateMembersResponse{
-		Members: members,
-		Traits:  traits,
-	}
-
-	bytes, err := json.Marshal(resp)
-	if err != nil {
-		LogAndWriteStatusInternalServerError(w, err, function)
-		return
-	}
-
-	LogAndWrite(w, bytes, http.StatusCreated, function)
+	legacyMemberHandlers().Create(w, r)
 }
 
 // isValidFormatCSV :

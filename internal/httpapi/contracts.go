@@ -23,6 +23,12 @@ type MemberStore interface {
 	SynchronizeMembersCSV(context.Context, string, io.Reader) (store.MemberSyncPlan, error)
 }
 
+// CrossMatchTraitReader is kept separate so member retrieval depends only on
+// the organization value it actually needs.
+type CrossMatchTraitReader interface {
+	CrossMatchTrait(context.Context, string) (*string, error)
+}
+
 // RoundStore is the consumer-owned persistence surface needed by round routes.
 type RoundStore interface {
 	ListRounds(context.Context, string) ([]string, error)
@@ -46,8 +52,9 @@ type Dependencies struct {
 }
 
 var (
-	_ OrganizationStore = (*store.Store)(nil)
-	_ MemberStore       = (*store.Store)(nil)
-	_ RoundStore        = (*store.Store)(nil)
-	_ PairStore         = (*store.Store)(nil)
+	_ OrganizationStore     = (*store.Store)(nil)
+	_ MemberStore           = (*store.Store)(nil)
+	_ CrossMatchTraitReader = (*store.Store)(nil)
+	_ RoundStore            = (*store.Store)(nil)
+	_ PairStore             = (*store.Store)(nil)
 )
