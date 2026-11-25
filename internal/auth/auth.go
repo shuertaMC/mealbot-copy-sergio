@@ -14,14 +14,6 @@ import (
 	"github.com/johnamadeo/mealbot/internal/config"
 )
 
-// InvalidAccessToken : Message to show if invalid access is invalid
-const InvalidAccessToken = "Invalid access token"
-
-// SigningAlgorithm is the only signing algorithm accepted for tokens.
-// Restricting this is important to avoid the issues described in
-// https://auth0.com/blog/2015/03/31/critical-vulnerabilities-in-json-web-token-libraries/
-const SigningAlgorithm = "RS256"
-
 // CustomJWTMiddleware : HTTP Handler w/ authentication capabilities
 type CustomJWTMiddleware struct {
 	ValidationKeyGetter jwt.Keyfunc
@@ -91,11 +83,6 @@ type JSONWebKeys struct {
 	N   string   `json:"n"`
 	E   string   `json:"e"`
 	X5c []string `json:"x5c"`
-}
-
-// GetFakeAuthHandler : Return handler w/o wrapping it w/ authentication; for testing
-func GetFakeAuthHandler(handler http.Handler) http.Handler {
-	return handler
 }
 
 // NewAuthHandler returns a function that wraps handlers with JWT validation
@@ -171,19 +158,17 @@ func getPEMCertificate(token *jwt.Token, jwksURL string) (string, error) {
 }
 
 // VerifyAudience checks that the 'aud' claim is present and contains audience.
-// The claim may be a single string or an array of strings (RFC 7519 section 4.1.3).
+// Only an array-valued claim is accepted, as in the original implementation;
+// a single string 'aud' is rejected.
 func VerifyAudience(claims jwt.MapClaims, audience string) error {
-	if _, ok := claims["aud"]; !ok {
+	rawAud, ok := claims["aud"]
+	if !ok {
 		return errors.New("No audience claim")
 	}
 
-	auds, err := claims.GetAudience()
-	if err != nil {
-		return errors.New("Invalid audience")
-	}
-
+	auds, _ := rawAud.([]interface{})
 	for _, item := range auds {
-		if item == audience {
+		if s, ok := item.(string); ok && s == audience {
 			return nil
 		}
 	}

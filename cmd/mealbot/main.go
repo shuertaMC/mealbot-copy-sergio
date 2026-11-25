@@ -93,7 +93,6 @@ func runPair(cfg config.Config) {
 	defer conn.Close()
 
 	runner := rounds.NewRunner(conn, rounds.NewMailgunMailer(cfg.Mailgun))
-	// runTestSequence(runner, conn, true)
 	err := runner.RunPairingScheduler(false)
 	if err != nil {
 		fmt.Println(err)
