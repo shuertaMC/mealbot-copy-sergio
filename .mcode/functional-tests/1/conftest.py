@@ -47,7 +47,7 @@ class _H(BaseHTTPRequestHandler):
 
 
 def make_token(key=None, iss=ISSUER, aud=AUDIENCE, exp_delta=3600, kid=KID, alg="RS256"):
-    claims = {"iss": iss, "aud": aud, "sub": "ft", "exp": int(time.time()) + exp_delta}
+    claims = {"iss": iss, "aud": [aud], "sub": "ft", "exp": int(time.time()) + exp_delta}
     return jwt.encode(claims, key or _key, algorithm=alg, headers={"kid": kid})
 
 
