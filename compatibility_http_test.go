@@ -1,4 +1,4 @@
-package main
+package mealbot
 
 // Future lifecycle verification: the repository test lifecycle must execute
 // `go test ./...`, which runs this compatibility suite without network calls.

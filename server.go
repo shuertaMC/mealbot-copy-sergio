@@ -1,12 +1,11 @@
-package main
+package mealbot
 
 import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/johnamadeo/mealbot/internal/httpapi"
 )
 
 // Middleware class
@@ -90,6 +89,12 @@ func dispatchCommand(args []string, out io.Writer) bool {
 	return true
 }
 
+// DispatchCommand preserves the legacy pair, migrate, and unknown-command
+// behavior while command composition moves into cmd/mealbot.
+func DispatchCommand(args []string, out io.Writer) bool {
+	return dispatchCommand(args, out)
+}
+
 func newServeMux(mw Middleware) *http.ServeMux {
 	serveMux := http.NewServeMux()
 	serveMux.Handle("/members", mw.Apply(MembersHandler))
@@ -99,15 +104,13 @@ func newServeMux(mw Middleware) *http.ServeMux {
 	serveMux.Handle("/rounds", mw.Apply(GetRoundsHandler))
 	serveMux.Handle("/round", mw.Apply(RoundHandler))
 	serveMux.Handle("/pairs", mw.Apply(GetPairsHandler))
-	serveMux.Handle("/", http.FileServer(http.Dir("./static")))
+	httpapi.RegisterStatic(serveMux, "./static")
 	return serveMux
 }
 
-func main() {
-	if dispatchCommand(os.Args, os.Stdout) {
-		return
-	}
-
+// NewHandler assembles the compatibility HTTP stack for the composition root.
+// Static assets remain outside authentication and CORS middleware.
+func NewHandler() http.Handler {
 	mw := Middleware{
 		MiddlewareHandlers: [](func(handler http.Handler) http.Handler){
 			GetAuthHandler,
@@ -115,12 +118,5 @@ func main() {
 		},
 	}
 
-	serveMux := newServeMux(mw)
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	log.Fatal(http.ListenAndServe(":"+port, serveMux))
+	return newServeMux(mw)
 }
