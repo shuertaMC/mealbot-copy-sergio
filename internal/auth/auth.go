@@ -1,4 +1,6 @@
-package main
+// Package auth validates Auth0-issued JSON Web Tokens. The expected issuer,
+// audience and JWKS location are supplied through config.Auth0.
+package auth
 
 import (
 	"encoding/json"
@@ -7,19 +9,18 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/dgrijalva/jwt-go"
+	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/johnamadeo/mealbot/internal/config"
 )
 
-const (
-	// InvalidAccessToken : Message to show if invalid access is invalid
-	InvalidAccessToken = "Invalid access token"
-	// Issuer : Value of the 'iss' claim in a JSON Web Token https://jwt.io/introduction/
-	Issuer = "https://mealbot.auth0.com/"
-	// Audience : Value of the 'aud' claim in a JSON Web Token https://jwt.io/introduction/
-	Audience = "https://mealbot-2.herokuapp.com/"
-	// JSONWebKeySet : Location of keys containing public keys used for verifying any JSON Web Token issued by the authorization server https://auth0.com/docs/jwks
-	JSONWebKeySet = "https://mealbot.auth0.com/.well-known/jwks.json"
-)
+// InvalidAccessToken : Message to show if invalid access is invalid
+const InvalidAccessToken = "Invalid access token"
+
+// SigningAlgorithm is the only signing algorithm accepted for tokens.
+// Restricting this is important to avoid the issues described in
+// https://auth0.com/blog/2015/03/31/critical-vulnerabilities-in-json-web-token-libraries/
+const SigningAlgorithm = "RS256"
 
 // CustomJWTMiddleware : HTTP Handler w/ authentication capabilities
 type CustomJWTMiddleware struct {
@@ -60,7 +61,8 @@ func (mw *CustomJWTMiddleware) CheckJWT(
 	}
 
 	token := authStr[1]
-	parsedToken, err := jwt.Parse(token, mw.ValidationKeyGetter)
+	parser := jwt.NewParser(jwt.WithValidMethods([]string{mw.SigningMethod.Alg()}))
+	parsedToken, err := parser.Parse(token, mw.ValidationKeyGetter)
 	if err != nil {
 		return err
 	}
@@ -96,48 +98,51 @@ func GetFakeAuthHandler(handler http.Handler) http.Handler {
 	return handler
 }
 
-// GetAuthHandler : Create handler w/ authentication logic for validating JWT sent to server
-func GetAuthHandler(handler http.Handler) http.Handler {
-	mw := &CustomJWTMiddleware{
+// NewAuthHandler returns a function that wraps handlers with JWT validation
+// against the issuer, audience and JWKS URL in cfg.
+func NewAuthHandler(cfg config.Auth0) func(http.Handler) http.Handler {
+	return func(handler http.Handler) http.Handler {
+		return NewMiddleware(cfg).Handler(handler)
+	}
+}
+
+// NewMiddleware builds the JWT middleware for the given Auth0 settings.
+func NewMiddleware(cfg config.Auth0) *CustomJWTMiddleware {
+	return &CustomJWTMiddleware{
 		ValidationKeyGetter: func(token *jwt.Token) (interface{}, error) {
-			checkAud := verifyAudience(token.Claims, Audience)
+			claims, _ := token.Claims.(jwt.MapClaims)
 
-			if checkAud != nil {
-				return token, errors.New("Invalid audience")
+			if err := VerifyAudience(claims, cfg.Audience); err != nil {
+				return nil, errors.New("Invalid audience")
 			}
 
-			checkIss := token.Claims.(jwt.MapClaims).VerifyIssuer(Issuer, true)
-			if !checkIss {
-				return token, errors.New("Invalid issuer")
+			if err := VerifyIssuer(claims, cfg.Issuer); err != nil {
+				return nil, errors.New("Invalid issuer")
 			}
 
-			cert, err := getPEMCertificate(token)
+			cert, err := getPEMCertificate(token, cfg.JWKSURL)
 			if err != nil {
-				return token, errors.New("PEM Certificate failed")
+				return nil, errors.New("PEM Certificate failed")
 			}
 
 			result, err := jwt.ParseRSAPublicKeyFromPEM([]byte(cert))
 			if err != nil {
-				return token, errors.New("Failed to parse RSA public key from PEM certificate")
+				return nil, errors.New("Failed to parse RSA public key from PEM certificate")
 			}
 
 			return result, nil
 		},
 
-		// When set, the middleware verifies that tokens are signed with the specific signing algorithm
-		// If the signing method is not constant the ValidationKeyGetter callback can be used to implement additional checks
-		// Important to avoid security issues described here: https://auth0.com/blog/2015/03/31/critical-vulnerabilities-in-json-web-token-libraries/
+		// The middleware verifies that tokens are signed with this specific signing algorithm.
 		SigningMethod: jwt.SigningMethodRS256,
 	}
-
-	return mw.Handler(handler)
 }
 
 // https://support.quovadisglobal.com/kb/a37/what-is-pem-format.aspx
-func getPEMCertificate(token *jwt.Token) (string, error) {
+func getPEMCertificate(token *jwt.Token, jwksURL string) (string, error) {
 	cert := ""
 
-	resp, err := http.Get(JSONWebKeySet)
+	resp, err := http.Get(jwksURL)
 	if err != nil {
 		return cert, err
 	}
@@ -150,7 +155,7 @@ func getPEMCertificate(token *jwt.Token) (string, error) {
 	}
 
 	for k := range jwks.Keys {
-		if token.Header["kid"] == jwks.Keys[k].Kid {
+		if token.Header["kid"] == jwks.Keys[k].Kid && len(jwks.Keys[k].X5c) > 0 {
 			cert = "-----BEGIN CERTIFICATE-----\n" +
 				jwks.Keys[k].X5c[0] +
 				"\n-----END CERTIFICATE-----"
@@ -165,21 +170,32 @@ func getPEMCertificate(token *jwt.Token) (string, error) {
 	return cert, nil
 }
 
-// https://github.com/dgrijalva/jwt-go/issues/290
-func verifyAudience(tokenClaims jwt.Claims, audience string) error {
-	var claims map[string]interface{}
-	claims, _ = tokenClaims.(jwt.MapClaims)
-
+// VerifyAudience checks that the 'aud' claim is present and contains audience.
+// The claim may be a single string or an array of strings (RFC 7519 section 4.1.3).
+func VerifyAudience(claims jwt.MapClaims, audience string) error {
 	if _, ok := claims["aud"]; !ok {
 		return errors.New("No audience claim")
 	}
 
-	claimsMap, _ := claims["aud"].([]interface{})
-	for _, item := range claimsMap {
+	auds, err := claims.GetAudience()
+	if err != nil {
+		return errors.New("Invalid audience")
+	}
+
+	for _, item := range auds {
 		if item == audience {
 			return nil
 		}
 	}
 
 	return errors.New("Invalid audience")
+}
+
+// VerifyIssuer checks that the 'iss' claim exactly equals issuer.
+func VerifyIssuer(claims jwt.MapClaims, issuer string) error {
+	iss, err := claims.GetIssuer()
+	if err != nil || iss != issuer {
+		return errors.New("Invalid issuer")
+	}
+	return nil
 }
