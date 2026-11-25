@@ -1,6 +1,6 @@
 module github.com/johnamadeo/mealbot
 
-// +heroku goVersion go1.24
+// +heroku goVersion go1.25
 // +heroku install ./cmd/...
 
 go 1.25
