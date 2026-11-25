@@ -53,8 +53,9 @@ func NewMiddleware(validator TokenValidator) *HTTPMiddleware {
 	return &HTTPMiddleware{validator: validator}
 }
 
-// Protect permits compatibility OPTIONS requests and otherwise returns one
-// generic unauthorized response for every authentication failure.
+// Protect permits compatibility OPTIONS requests and otherwise preserves the
+// characterized legacy rejection contract: authentication failures stop the
+// handler chain without writing a status, body, or authentication challenge.
 func (m *HTTPMiddleware) Protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
@@ -64,8 +65,6 @@ func (m *HTTPMiddleware) Protect(next http.Handler) http.Handler {
 
 		token, err := BearerToken(r.Header.Get("Authorization"))
 		if err != nil || m == nil || m.validator == nil || m.validator.Validate(r.Context(), token) != nil {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, InvalidAccessToken, http.StatusUnauthorized)
 			return
 		}
 		next.ServeHTTP(w, r)

@@ -145,14 +145,15 @@ func TestRunWebAppliesMigrationsBuildsHandlerAndReturnsServerError(t *testing.T)
 	}
 }
 
-func TestBuildWebHandlerServesStaticAndProtectsConcreteRoutes(t *testing.T) {
+func TestBuildWebHandlerServesStaticAndPreservesAuthenticationContractsOnEveryAPIRoute(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(directory, "privacy.html"), []byte("privacy page"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Load(mapEnvironment(map[string]string{"DATABASE_URL": "postgres://database"}))
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	handler, err := buildWebHandler(cfg, &fakeApplicationStore{}, logger, directory)
+	repository := &fakeApplicationStore{}
+	handler, err := buildWebHandler(cfg, repository, logger, directory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,11 +165,58 @@ func TestBuildWebHandlerServesStaticAndProtectsConcreteRoutes(t *testing.T) {
 		t.Fatalf("static response = %d %q", staticResponse.Code, staticResponse.Body.String())
 	}
 
-	apiRequest := httptest.NewRequest(http.MethodGet, "/orgs?admin=admin", nil)
-	apiResponse := httptest.NewRecorder()
-	handler.ServeHTTP(apiResponse, apiRequest)
-	if apiResponse.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated API status = %d, want %d", apiResponse.Code, http.StatusUnauthorized)
+	routes := []struct {
+		name   string
+		method string
+		target string
+		body   string
+	}{
+		{name: "members", method: http.MethodGet, target: "/members?org=alpha"},
+		{name: "organizations", method: http.MethodGet, target: "/orgs?admin=admin"},
+		{name: "organization", method: http.MethodPost, target: "/org?admin=admin", body: `{"org":"alpha"}`},
+		{name: "cross match trait", method: http.MethodPost, target: "/crossmatchtrait?org=alpha", body: `{"trait":"cohort"}`},
+		{name: "rounds", method: http.MethodGet, target: "/rounds?org=alpha"},
+		{name: "round", method: http.MethodPost, target: "/round?org=alpha&round=2026-11-25T12%3A00%3A00Z"},
+		{name: "pairs", method: http.MethodGet, target: "/pairs?org=alpha"},
+	}
+	credentials := []struct {
+		name   string
+		header string
+	}{
+		{name: "missing"},
+		{name: "malformed", header: "Basic token"},
+		{name: "unverifiable", header: "Bearer not.a.jwt"},
+	}
+	for _, route := range routes {
+		for _, credential := range credentials {
+			t.Run(route.name+"/"+credential.name, func(t *testing.T) {
+				apiRequest := httptest.NewRequest(route.method, route.target, strings.NewReader(route.body))
+				apiRequest.Header.Set("Authorization", credential.header)
+				apiRequest.Header.Set("Origin", "https://client.example")
+				apiResponse := httptest.NewRecorder()
+				handler.ServeHTTP(apiResponse, apiRequest)
+
+				if apiResponse.Code != http.StatusOK || apiResponse.Body.Len() != 0 {
+					t.Fatalf("authentication rejection = %d %q, want empty 200", apiResponse.Code, apiResponse.Body.String())
+				}
+				wantHeaders := map[string]string{
+					"Access-Control-Allow-Origin":  "https://client.example",
+					"Access-Control-Allow-Headers": config.DefaultCORSAllowedHeaders,
+					"Access-Control-Allow-Methods": config.DefaultCORSAllowedMethods,
+				}
+				if len(apiResponse.Header()) != len(wantHeaders) {
+					t.Fatalf("authentication rejection headers = %v, want only compatibility CORS headers", apiResponse.Header())
+				}
+				for name, want := range wantHeaders {
+					if got := apiResponse.Header().Get(name); got != want {
+						t.Fatalf("%s = %q, want %q", name, got, want)
+					}
+				}
+			})
+		}
+	}
+	if repository.httpCalls != 0 {
+		t.Fatalf("authentication rejections invoked protected stores %d times", repository.httpCalls)
 	}
 
 	preflight := httptest.NewRequest(http.MethodOptions, "/orgs", nil)
@@ -347,27 +395,51 @@ type fakeApplicationStore struct {
 	loadMembersFunc func(context.Context, string) (pairing.MembersMap, error)
 	saveRoundFunc   func(context.Context, string, pairing.Round, pairing.MembersMap) error
 	reconstructFunc func(context.Context) (store.HistoryReconstructionResult, error)
+	httpCalls       int
 }
 
-func (*fakeApplicationStore) OrganizationsByAdmin(context.Context, string) ([]string, error) {
+func (s *fakeApplicationStore) OrganizationsByAdmin(context.Context, string) ([]string, error) {
+	s.httpCalls++
 	return nil, nil
 }
-func (*fakeApplicationStore) CreateOrganization(context.Context, string, string) error { return nil }
-func (*fakeApplicationStore) CrossMatchTrait(context.Context, string) (*string, error) {
+func (s *fakeApplicationStore) CreateOrganization(context.Context, string, string) error {
+	s.httpCalls++
+	return nil
+}
+func (s *fakeApplicationStore) CrossMatchTrait(context.Context, string) (*string, error) {
+	s.httpCalls++
 	return nil, nil
 }
-func (*fakeApplicationStore) SetCrossMatchTrait(context.Context, string, *string) error { return nil }
-func (*fakeApplicationStore) Members(context.Context, string, bool) ([]store.Member, error) {
+func (s *fakeApplicationStore) SetCrossMatchTrait(context.Context, string, *string) error {
+	s.httpCalls++
+	return nil
+}
+func (s *fakeApplicationStore) Members(context.Context, string, bool) ([]store.Member, error) {
+	s.httpCalls++
 	return nil, nil
 }
-func (*fakeApplicationStore) SynchronizeMembersCSV(context.Context, string, io.Reader) (store.MemberSyncPlan, error) {
+func (s *fakeApplicationStore) SynchronizeMembersCSV(context.Context, string, io.Reader) (store.MemberSyncPlan, error) {
+	s.httpCalls++
 	return store.MemberSyncPlan{}, nil
 }
-func (*fakeApplicationStore) ListRounds(context.Context, string) ([]string, error)       { return nil, nil }
-func (*fakeApplicationStore) AddRound(context.Context, string, string) (int, error)      { return 0, nil }
-func (*fakeApplicationStore) RescheduleRound(context.Context, string, string, int) error { return nil }
-func (*fakeApplicationStore) DeleteRound(context.Context, string, int) error             { return nil }
-func (*fakeApplicationStore) PairHistory(context.Context, string) ([][]store.HistoricalPair, error) {
+func (s *fakeApplicationStore) ListRounds(context.Context, string) ([]string, error) {
+	s.httpCalls++
+	return nil, nil
+}
+func (s *fakeApplicationStore) AddRound(context.Context, string, string) (int, error) {
+	s.httpCalls++
+	return 0, nil
+}
+func (s *fakeApplicationStore) RescheduleRound(context.Context, string, string, int) error {
+	s.httpCalls++
+	return nil
+}
+func (s *fakeApplicationStore) DeleteRound(context.Context, string, int) error {
+	s.httpCalls++
+	return nil
+}
+func (s *fakeApplicationStore) PairHistory(context.Context, string) ([][]store.HistoricalPair, error) {
+	s.httpCalls++
 	return nil, nil
 }
 func (s *fakeApplicationStore) DueRounds(ctx context.Context, before time.Time) ([]pairing.ScheduledRound, error) {

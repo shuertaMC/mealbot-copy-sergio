@@ -495,6 +495,9 @@ func TestOptionsCorsAndAuthenticationContracts(t *testing.T) {
 		if recorder.Code != http.StatusOK || recorder.Body.Len() != 0 {
 			t.Fatalf("JWT failure for %q = status %d body %q; want empty 200", authHeader, recorder.Code, recorder.Body.String())
 		}
+		if len(recorder.Header()) != 0 {
+			t.Fatalf("JWT failure for %q invented headers: %v", authHeader, recorder.Header())
+		}
 	}
 	if authCoreCalled {
 		t.Fatal("JWT failures must not call the protected handler")
