@@ -91,8 +91,8 @@ func TestComposedPostgreSQLJourney(t *testing.T) {
 		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 			t.Fatalf("read migration ledger: %v", err)
 		}
-		if migrationCount != 3 {
-			t.Fatalf("applied migrations = %d, want 3", migrationCount)
+		if migrationCount != 4 {
+			t.Fatalf("applied migrations = %d, want 4", migrationCount)
 		}
 
 		handler, err := buildWebHandler(cfg, repository, deps.logger, "../../static")
