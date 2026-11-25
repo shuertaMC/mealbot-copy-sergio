@@ -1,22 +1,25 @@
 package mealbot
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
 	"os"
 	"strings"
+	"time"
 
+	pairingdomain "github.com/johnamadeo/mealbot/internal/pairing"
 	"github.com/johnamadeo/server"
 	mailgun "github.com/mailgun/mailgun-go"
 )
 
 const (
 	// MaxTries is the max. number of times to attempt re-matching if a non-optimal matching is initially made
-	MaxTries = 50
+	MaxTries = pairingdomain.MaxTries
 	// RecentRoundRange : max. no. of rounds between 2 pairings that is considered recent
-	RecentRoundRange = 5
+	RecentRoundRange = pairingdomain.RecentRoundRange
 	// EmailIntro : Text to put in the beginning of the email body
 	EmailIntro = "Your Mealbot group this week is:"
 	// EmailFooter : Text to put at the end of the email body
@@ -25,108 +28,27 @@ const (
 	EmailSubject = "Your new Mealbot group"
 )
 
-// Pair :
-type Pair struct {
-	ID1     string
-	ID2     string
-	ExtraID string
-}
+// Pair is retained as a compatibility alias while internal/pairing owns it.
+type Pair = pairingdomain.Pair
 
 // NewPair :
 func NewPair(name1 string, name2 string) Pair {
-	if name1 < name2 {
-		return Pair{
-			ID1:     name1,
-			ID2:     name2,
-			ExtraID: "",
-		}
-	}
-	return Pair{
-		ID1:     name2,
-		ID2:     name1,
-		ExtraID: "",
-	}
-}
-
-func (p Pair) String() string {
-	return fmt.Sprintf("%-40s %-40s %-40s", p.ID1, p.ID2, p.ExtraID)
+	return pairingdomain.NewPair(name1, name2)
 }
 
 // Round : Data structure for storing info on one round of pairings between members
-type Round struct {
-	Number           int
-	Pairs            map[Pair]bool
-	Paired           map[string]bool
-	DrawOrderedPairs []Pair // for logging; keeps order in which pairs were made
-}
+type Round = pairingdomain.Round
 
 // NewRound :
 func NewRound(roundNumber int) Round {
-	return Round{
-		Number:           roundNumber,
-		Pairs:            map[Pair]bool{},
-		Paired:           map[string]bool{},
-		DrawOrderedPairs: []Pair{},
-	}
-}
-
-// AddPair : Record a new pairing made during the round
-func (r *Round) AddPair(member1 string, member2 string) {
-	r.Paired[member1] = true
-	r.Paired[member2] = true
-
-	pair := NewPair(member1, member2)
-	r.Pairs[pair] = true
-
-	r.DrawOrderedPairs = append(r.DrawOrderedPairs, pair)
-}
-
-// IsPaired : Check if member has already been paired this round
-func (r Round) IsPaired(member string) bool {
-	_, ok := r.Paired[member]
-	return ok
-}
-
-func (r Round) String() string {
-	header := fmt.Sprintf("---------\nRound %d\n---------\n", r.Number)
-
-	pairs := []string{}
-	for _, pair := range r.DrawOrderedPairs {
-		pairs = append(pairs, pair.String())
-	}
-
-	return header + strings.Join(pairs, "\n") + "\n"
+	return pairingdomain.NewRound(roundNumber)
 }
 
 // MinimalMember : A pared down version of the Member struct (see members.go) for the pairing process
-type MinimalMember struct {
-	ID            string
-	Name          string
-	Trait         string
-	LastRoundWith map[string]int
-}
+type MinimalMember = pairingdomain.MinimalMember
 
 // MembersMap :
-type MembersMap map[string]MinimalMember
-
-// UpdateLastRoundWith : Updates the last round 2 members were matched with each other
-func (mm *MembersMap) UpdateLastRoundWith(id1 string, id2 string, roundNum int) {
-	(*mm)[id1].LastRoundWith[id2] = roundNum
-	(*mm)[id2].LastRoundWith[id1] = roundNum
-}
-
-func (mm MembersMap) String() string {
-	str := "X's last round with Y\n"
-	for memberID := range mm {
-		str += fmt.Sprintf("%s\n", memberID)
-
-		for partnerID, lastRound := range mm[memberID].LastRoundWith {
-			str += fmt.Sprintf("\t%-30s : %d\n", partnerID, lastRound)
-		}
-		str += "\n"
-	}
-	return str
-}
+type MembersMap = pairingdomain.MembersMap
 
 type RandomIntGenerator func(int) int
 
@@ -136,104 +58,49 @@ var sendEmailsForRound = sendEmails
 var saveRoundForRound = saveRoundInDB
 
 func runPairingAlgorithm(members MembersMap, roundNum int, genRandomInt RandomIntGenerator) (MembersMap, Round) {
-	memberIds := []string{}
-	for id := range members {
-		memberIds = append(memberIds, id)
-	}
-
-	tries := 0
-	var round Round
-	// retry until a) a round w/o repeats is found, or b) MaxTries is reached
-	for {
-		// Make a deep copy of the members map
-		bytes, _ := json.Marshal(members)
-		var tempMembers MembersMap
-		json.Unmarshal(bytes, &tempMembers)
-
-		round = NewRound(roundNum)
-		numRecentMatches := 0
-
-		// hold out odd member out and add it back in at the end of round
-		var extraMemberID string
-		if len(tempMembers)%2 == 1 {
-			extraMemberID = memberIds[genRandomInt(len(memberIds))]
-		}
-
-		for _, memberID := range memberIds {
-			if round.IsPaired(memberID) || memberID == extraMemberID {
-				continue
-			}
-
-			member := tempMembers[memberID]
-
-			var goodCandidates, okCandidates, badCandidates []MinimalMember
-			for candidateID, lastRound := range member.LastRoundWith {
-				if round.IsPaired(candidateID) || candidateID == extraMemberID {
-					continue
-				}
-
-				notRecentlyMatched := lastRound == -1 || round.Number-lastRound > RecentRoundRange
-				hasDifferentTraits := member.Trait == members[candidateID].Trait
-
-				switch {
-				case notRecentlyMatched && hasDifferentTraits:
-					goodCandidates = append(goodCandidates, members[candidateID])
-				case notRecentlyMatched && !hasDifferentTraits:
-					okCandidates = append(okCandidates, members[candidateID])
-				default:
-					badCandidates = append(badCandidates, members[candidateID])
-				}
-			}
-
-			var partner MinimalMember
-			switch {
-			case len(goodCandidates) > 0:
-				partner = selectRandomPartner(genRandomInt, goodCandidates)
-			case len(okCandidates) > 0:
-				partner = selectRandomPartner(genRandomInt, okCandidates)
-			default:
-				partner = selectRandomPartner(genRandomInt, badCandidates)
-				numRecentMatches++
-			}
-
-			round.AddPair(memberID, partner.ID)
-			tempMembers.UpdateLastRoundWith(memberID, partner.ID, round.Number)
-		}
-
-		tries++
-
-		if numRecentMatches == 0 || tries == MaxTries {
-			members = tempMembers
-			fmt.Println(round)
-			fmt.Printf("%d recent matches\n", numRecentMatches)
-			break
-		}
-	}
-
-	return members, round
+	return pairingdomain.Match(members, roundNum, pairingdomain.RandomFunc(genRandomInt))
 }
 
 func runPairingRound(orgname string, roundNum int, testMode bool) error {
-	members, err := getMinimalMembersForRound(orgname)
-	if err != nil {
-		return err
+	service := pairingdomain.Service{
+		Members:           legacyMemberLoader{},
+		Store:             legacyRoundStore{},
+		RoundDelivery:     legacyRoundDelivery{},
+		Matcher:           legacyMatcher{},
+		Random:            pairingdomain.RandomFunc(rand.Intn),
+		SkipNotifications: testMode,
 	}
-
-	members, round := runPairingAlgorithmForRound(members, roundNum, rand.Intn)
-
-	if !testMode {
-		err = sendEmailsForRound(orgname, round, members)
-		if err != nil {
-			return err
-		}
+	err := service.ProcessRound(context.Background(), pairingdomain.ScheduledRound{Organization: orgname, Number: roundNum})
+	// Preserve the legacy root helper's exact dependency error while the new
+	// domain service keeps useful contextual wrapping for modern callers.
+	for errors.Unwrap(err) != nil {
+		err = errors.Unwrap(err)
 	}
+	return err
+}
 
-	err = saveRoundForRound(round, members, orgname)
-	if err != nil {
-		return err
-	}
+type legacyMemberLoader struct{}
 
-	return nil
+func (legacyMemberLoader) LoadMembers(_ context.Context, organization string) (pairingdomain.MembersMap, error) {
+	return getMinimalMembersForRound(organization)
+}
+
+type legacyMatcher struct{}
+
+func (legacyMatcher) Match(members pairingdomain.MembersMap, round int, random pairingdomain.Random) (pairingdomain.MembersMap, pairingdomain.Round) {
+	return runPairingAlgorithmForRound(members, round, random.Intn)
+}
+
+type legacyRoundDelivery struct{}
+
+func (legacyRoundDelivery) DeliverRound(_ context.Context, organization string, round pairingdomain.Round, members pairingdomain.MembersMap) error {
+	return sendEmailsForRound(organization, round, members)
+}
+
+type legacyRoundStore struct{}
+
+func (legacyRoundStore) SaveRound(_ context.Context, organization string, round pairingdomain.Round, members pairingdomain.MembersMap) error {
+	return saveRoundForRound(round, members, organization)
 }
 
 func sendEmails(orgname string, round Round, members MembersMap) error {
@@ -248,10 +115,6 @@ func sendEmails(orgname string, round Round, members MembersMap) error {
 	}
 
 	return nil
-}
-
-func selectRandomPartner(genRandomInt RandomIntGenerator, members []MinimalMember) MinimalMember {
-	return members[genRandomInt(len(members))]
 }
 
 func getMinimalMembersFromDB(orgname string) (MembersMap, error) {
@@ -380,32 +243,50 @@ func sendEmail(orgname string, toEmails []string, toNames []string) error {
 }
 
 func runPairingScheduler(testMode bool) error {
-	db, err := server.CreateDBConnection(LocalDBConnection)
-	defer db.Close()
-	if err != nil {
-		return err
+	scheduler := pairingdomain.Scheduler{
+		Store:     legacyDueRoundStore{},
+		Clock:     systemClock{},
+		Processor: legacyRoundProcessor{testMode: testMode},
 	}
+	return scheduler.Run(context.Background())
+}
 
-	rows, err := db.Query(
-		"SELECT organization, id FROM rounds WHERE scheduled_date < now() AT TIME ZONE 'utc' AND done = false",
+type systemClock struct{}
+
+func (systemClock) Now() time.Time { return time.Now() }
+
+type legacyRoundProcessor struct{ testMode bool }
+
+func (p legacyRoundProcessor) ProcessRound(_ context.Context, round pairingdomain.ScheduledRound) error {
+	return runPairingRound(round.Organization, round.Number, p.testMode)
+}
+
+type legacyDueRoundStore struct{}
+
+func (legacyDueRoundStore) DueRounds(ctx context.Context, before time.Time) ([]pairingdomain.ScheduledRound, error) {
+	db, err := server.CreateDBConnection(LocalDBConnection)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(ctx,
+		"SELECT organization, id FROM rounds WHERE scheduled_date < $1 AND done = false",
+		before,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
+	defer rows.Close()
+	rounds := []pairingdomain.ScheduledRound{}
 	for rows.Next() {
-		var orgname string
-		var roundNum int
-		err := rows.Scan(&orgname, &roundNum)
-		if err != nil {
-			return err
+		var round pairingdomain.ScheduledRound
+		if err := rows.Scan(&round.Organization, &round.Number); err != nil {
+			return nil, err
 		}
-
-		err = runPairingRound(orgname, roundNum, testMode)
-		if err != nil {
-			return err
-		}
+		rounds = append(rounds, round)
 	}
-
-	return nil
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return rounds, nil
 }
