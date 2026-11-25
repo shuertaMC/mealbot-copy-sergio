@@ -225,6 +225,76 @@ func TestSaveRoundRollsBackAtEveryStage(t *testing.T) {
 	}
 }
 
+func TestReconstructPairHistorySelectsActiveMembersAndContiguousRounds(t *testing.T) {
+	state := &driverState{queryFixtures: []queryFixture{
+		{
+			contains: "FROM members",
+			columns:  []string{"organization", "email", "name", "metadata", "last_round_with", "active"},
+			values: [][]driver.Value{
+				{"org", "a@example.com", "A", []byte(`{}`), []byte(`{"stale@example.com":99}`), true},
+				{"org", "b@example.com", "B", []byte(`{}`), []byte(`{"stale@example.com":99}`), true},
+			},
+		},
+		{
+			contains: "FROM pairs AS p",
+			columns:  []string{"organization", "id1", "id2", "extraid", "round"},
+			values:   [][]driver.Value{{"org", "a@example.com", "b@example.com", nil, int64(0)}},
+		},
+	}}
+	db := openDriverDB(state)
+	defer db.Close()
+	repository, _ := New(db)
+	result, err := repository.ReconstructPairHistory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Completed || result.Organizations != 1 || result.Members != 2 || result.Pairs != 1 {
+		t.Fatalf("ReconstructPairHistory() result = %+v", result)
+	}
+	events := strings.Join(state.snapshot(), "\n")
+	if !strings.Contains(events, "FROM members WHERE active = TRUE") {
+		t.Fatalf("reconstruction member query does not filter active rows:\n%s", events)
+	}
+	for _, fragment := range []string{"WITH RECURSIVE contiguous_rounds", "WHERE round = 0", "current.round + 1", "INNER JOIN contiguous_rounds"} {
+		if !strings.Contains(events, fragment) {
+			t.Fatalf("reconstruction pair query does not enforce %q:\n%s", fragment, events)
+		}
+	}
+	if strings.Count(events, "exec:UPDATE members SET last_round_with") != 2 {
+		t.Fatalf("reconstruction updates = %d, want two active members:\n%s", strings.Count(events, "exec:UPDATE members SET last_round_with"), events)
+	}
+	if !strings.HasSuffix(events, "commit") {
+		t.Fatalf("transaction events do not end in commit:\n%s", events)
+	}
+}
+
+func TestReconstructPairHistoryPairIterationErrorRollsBack(t *testing.T) {
+	terminalErr := errors.New("pair iteration failed")
+	state := &driverState{queryFixtures: []queryFixture{
+		{
+			contains: "FROM members",
+			columns:  []string{"organization", "email", "name", "metadata", "last_round_with", "active"},
+			values:   [][]driver.Value{{"org", "a@example.com", "A", []byte(`{}`), []byte(`{}`), true}},
+		},
+		{
+			contains:    "FROM pairs AS p",
+			columns:     []string{"organization", "id1", "id2", "extraid", "round"},
+			terminalErr: terminalErr,
+		},
+	}}
+	db := openDriverDB(state)
+	defer db.Close()
+	repository, _ := New(db)
+	result, err := repository.ReconstructPairHistory(context.Background())
+	if err == nil || !strings.Contains(err.Error(), terminalErr.Error()) {
+		t.Fatalf("ReconstructPairHistory() error = %v, want iteration error", err)
+	}
+	if result != (HistoryReconstructionResult{}) {
+		t.Fatalf("failed reconstruction result = %+v, want zero value", result)
+	}
+	assertRollbackWithoutCommit(t, state)
+}
+
 func TestOrderedRoundPairsUsesDrawOrderThenStableMapOrder(t *testing.T) {
 	drawn := pairing.Pair{ID1: "c", ID2: "d"}
 	round := pairing.Round{

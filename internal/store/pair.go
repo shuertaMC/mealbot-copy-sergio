@@ -245,9 +245,10 @@ type storedPair struct {
 	round        int
 }
 
-// ReconstructPairHistory derives symmetric member histories from all stored
-// pairs. It is safe to repeat: each run deterministically replaces history
-// with the same pair-derived values and does not alter other member fields.
+// ReconstructPairHistory derives symmetric active-member histories from the
+// contiguous stored pair rounds beginning at zero. It is safe to repeat: each
+// run deterministically replaces active histories with the same pair-derived
+// values and does not alter inactive rows or other member fields.
 func (s *Store) ReconstructPairHistory(ctx context.Context) (HistoryReconstructionResult, error) {
 	if s == nil || s.db == nil {
 		return HistoryReconstructionResult{}, ErrNilDatabase
@@ -259,6 +260,7 @@ func (s *Store) ReconstructPairHistory(ctx context.Context) (HistoryReconstructi
 		memberRows, err := tx.QueryContext(opCtx, `
 SELECT organization, email, name, metadata, last_round_with, active
 FROM members
+WHERE active = TRUE
 ORDER BY organization, email
 FOR UPDATE
 `)
@@ -274,9 +276,28 @@ FOR UPDATE
 		}
 
 		pairRows, err := tx.QueryContext(opCtx, `
-SELECT organization, id1, id2, extraid, round
-FROM pairs
-ORDER BY organization, round, id1, id2, extraid NULLS FIRST
+WITH RECURSIVE contiguous_rounds (organization, round) AS (
+    SELECT organization, 0
+    FROM pairs
+    WHERE round = 0
+    GROUP BY organization
+
+    UNION ALL
+
+    SELECT current.organization, current.round + 1
+    FROM contiguous_rounds AS current
+    WHERE EXISTS (
+        SELECT 1
+        FROM pairs AS next
+        WHERE next.organization = current.organization
+          AND next.round = current.round + 1
+    )
+)
+SELECT p.organization, p.id1, p.id2, p.extraid, p.round
+FROM pairs AS p
+INNER JOIN contiguous_rounds AS included
+    ON included.organization = p.organization AND included.round = p.round
+ORDER BY p.organization, p.round, p.id1, p.id2, p.extraid NULLS FIRST
 `)
 		if err != nil {
 			return fmt.Errorf("load pairs for history reconstruction: %w", err)

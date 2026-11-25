@@ -434,6 +434,120 @@ INSERT INTO pairs (organization, id1, id2, extraid, round) VALUES
 	})
 }
 
+func TestReconstructPairHistoryPostgreSQLExcludesInactiveMembersAndRoundsAfterGap(t *testing.T) {
+	withIsolatedIntegrationDB(t, func(ctx context.Context, db *sql.DB) {
+		repository := migratedStore(t, ctx, db)
+		seedOrganizationAndMembers(t, ctx, db, "reconstruct-filtered", "a@example.com", "b@example.com", "c@example.com", "inactive@example.com")
+		if _, err := db.ExecContext(ctx, `
+UPDATE members
+SET last_round_with = '{"stale@example.com":99}'::jsonb
+WHERE organization = 'reconstruct-filtered'
+`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+UPDATE members SET active = FALSE
+WHERE organization = 'reconstruct-filtered' AND email = 'inactive@example.com'
+`); err != nil {
+			t.Fatal(err)
+		}
+		for _, round := range []int{0, 1, 2} {
+			if _, err := db.ExecContext(ctx, `
+INSERT INTO rounds (organization, id, scheduled_date, done)
+VALUES ('reconstruct-filtered', $1, CURRENT_TIMESTAMP, TRUE)
+`, round); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := db.ExecContext(ctx, `
+INSERT INTO pairs (organization, id1, id2, extraid, round) VALUES
+('reconstruct-filtered', 'a@example.com', 'b@example.com', 'inactive@example.com', 0),
+('reconstruct-filtered', 'a@example.com', 'c@example.com', NULL, 2)
+`); err != nil {
+			t.Fatal(err)
+		}
+
+		first, err := repository.ReconstructPairHistory(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !first.Completed || first.Organizations != 1 || first.Members != 3 || first.Pairs != 1 {
+			t.Fatalf("filtered reconstruction result = %+v", first)
+		}
+		want := map[string]string{
+			"a@example.com":        `{"b@example.com": 0}`,
+			"b@example.com":        `{"a@example.com": 0}`,
+			"c@example.com":        `{}`,
+			"inactive@example.com": `{"stale@example.com": 99}`,
+		}
+		firstHistories := readHistories(t, ctx, db, "reconstruct-filtered")
+		if !reflect.DeepEqual(firstHistories, want) {
+			t.Fatalf("filtered histories = %#v, want %#v", firstHistories, want)
+		}
+
+		second, err := repository.ReconstructPairHistory(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if second != first || !reflect.DeepEqual(readHistories(t, ctx, db, "reconstruct-filtered"), firstHistories) {
+			t.Fatalf("second reconstruction = %+v, want %+v with unchanged histories", second, first)
+		}
+	})
+}
+
+func TestReconstructPairHistoryPostgreSQLRollsBackPartialUpdates(t *testing.T) {
+	withIsolatedIntegrationDB(t, func(ctx context.Context, db *sql.DB) {
+		repository := migratedStore(t, ctx, db)
+		seedOrganizationAndMembers(t, ctx, db, "reconstruct-rollback", "a@example.com", "b@example.com")
+		if _, err := db.ExecContext(ctx, `
+UPDATE members
+SET last_round_with = '{"stale@example.com":99}'::jsonb
+WHERE organization = 'reconstruct-rollback'
+`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+INSERT INTO rounds (organization, id, scheduled_date, done)
+VALUES ('reconstruct-rollback', 0, CURRENT_TIMESTAMP, TRUE)
+`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+INSERT INTO pairs (organization, id1, id2, extraid, round)
+VALUES ('reconstruct-rollback', 'a@example.com', 'b@example.com', NULL, 0)
+`); err != nil {
+			t.Fatal(err)
+		}
+		before := readHistories(t, ctx, db, "reconstruct-rollback")
+		if _, err := db.ExecContext(ctx, `
+CREATE OR REPLACE FUNCTION fail_second_reconstruction_update() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.organization = 'reconstruct-rollback' AND NEW.email = 'b@example.com' THEN
+        RAISE EXCEPTION 'injected reconstruction update failure';
+    END IF;
+    RETURN NEW;
+END;
+$$
+`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+CREATE TRIGGER fail_second_reconstruction_update
+BEFORE UPDATE ON members
+FOR EACH ROW EXECUTE FUNCTION fail_second_reconstruction_update()
+`); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := repository.ReconstructPairHistory(ctx); err == nil {
+			t.Fatal("ReconstructPairHistory() succeeded, want injected update failure")
+		}
+		if after := readHistories(t, ctx, db, "reconstruct-rollback"); !reflect.DeepEqual(after, before) {
+			t.Fatalf("failed reconstruction histories = %#v, want rolled back %#v", after, before)
+		}
+	})
+}
+
 func migratedStore(t *testing.T, ctx context.Context, db *sql.DB) *Store {
 	t.Helper()
 	migrator, err := NewMigrator(db)
