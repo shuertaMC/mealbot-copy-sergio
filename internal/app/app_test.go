@@ -3,16 +3,21 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/johnamadeo/mealbot/internal/auth"
 	"github.com/johnamadeo/mealbot/internal/config"
 	"github.com/johnamadeo/mealbot/internal/domain"
 	"github.com/johnamadeo/mealbot/internal/httpapi"
@@ -95,6 +100,17 @@ func (r *fakeRepository) Close() error { r.closes++; return r.closeErr }
 type fakeDelivery struct{}
 
 func (fakeDelivery) Deliver(context.Context, mailer.Message) error { return nil }
+
+type localKeySource struct {
+	key *rsa.PublicKey
+}
+
+func (s localKeySource) Key(_ context.Context, kid string) (*rsa.PublicKey, error) {
+	if kid != "app-test-key" {
+		return nil, errors.New("unknown test key")
+	}
+	return s.key, nil
+}
 
 type fakeScheduler struct {
 	calls int
@@ -223,36 +239,87 @@ func TestExecuteFailuresAreSurfacedAndCloseOnce(t *testing.T) {
 func TestComposedHTTPServerAuthenticatedOrganizationSmokeAndStatic(t *testing.T) {
 	repository := &fakeRepository{}
 	configuration := testConfig(t)
-	authenticate := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-			if request.Header.Get("Authorization") != "Bearer test" {
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			next.ServeHTTP(w, request)
-		})
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
 	}
-	composed, err := newHTTPServer(configuration, repository, authenticate, slog.Default())
+	settings := configuration.Auth0()
+	validator, err := auth.NewValidator(settings.Issuer, settings.Audience, localKeySource{key: &privateKey.PublicKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.RegisteredClaims{
+		Issuer: settings.Issuer, Audience: jwt.ClaimStrings{settings.Audience},
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	})
+	token.Header["kid"] = "app-test-key"
+	signedToken, err := token.SignedString(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed, err := newHTTPServer(configuration, repository, auth.NewMiddleware(validator).Handler, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := composed.(*http.Server)
-
-	create := httptest.NewRecorder()
-	createRequest := httptest.NewRequest(http.MethodPost, "/org?admin=admin@example.com", strings.NewReader(`{"org":"club"}`))
-	createRequest.Header.Set("Authorization", "Bearer test")
-	server.Handler.ServeHTTP(create, createRequest)
-	list := httptest.NewRecorder()
-	listRequest := httptest.NewRequest(http.MethodGet, "/orgs?admin=admin@example.com", nil)
-	listRequest.Header.Set("Authorization", "Bearer test")
-	server.Handler.ServeHTTP(list, listRequest)
-	privacy := httptest.NewRecorder()
-	server.Handler.ServeHTTP(privacy, httptest.NewRequest(http.MethodGet, "/privacy.html", nil))
-	if create.Code != http.StatusCreated || list.Code != http.StatusOK || !strings.Contains(list.Body.String(), "club") || privacy.Code != http.StatusOK || !strings.Contains(privacy.Body.String(), "Privacy Policy") {
-		t.Fatalf("smoke create=%d list=%d %q privacy=%d", create.Code, list.Code, list.Body.String(), privacy.Code)
-	}
 	if server.Addr != ":8080" || server.ReadTimeout != time.Second || server.IdleTimeout != 2*time.Second {
 		t.Fatalf("server configuration = %#v", server)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveErrors := make(chan error, 1)
+	go func() { serveErrors <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownContext); err != nil {
+			t.Errorf("shutdown composed server: %v", err)
+		}
+		if err := <-serveErrors; !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("serve composed server: %v", err)
+		}
+	})
+
+	client := &http.Client{Timeout: time.Second}
+	request := func(method, path, authorization, body string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest(method, "http://"+listener.Addr().String()+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if authorization != "" {
+			req.Header.Set("Authorization", authorization)
+		}
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		responseBody, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if readErr != nil || closeErr != nil {
+			t.Fatalf("read response: %v; close response: %v", readErr, closeErr)
+		}
+		return response.StatusCode, string(responseBody)
+	}
+
+	authorization := "Bearer " + signedToken
+	createStatus, createBody := request(http.MethodPost, "/org?admin=admin@example.com", authorization, `{"org":"club"}`)
+	if createStatus != http.StatusCreated || !strings.Contains(createBody, "Successfully created new organization") {
+		t.Fatalf("create organization response = %d %q", createStatus, createBody)
+	}
+	listStatus, listBody := request(http.MethodGet, "/orgs?admin=admin@example.com", authorization, "")
+	if listStatus != http.StatusOK || listBody != "{\"orgs\":[\"club\"]}\n" {
+		t.Fatalf("list organizations response = %d %q", listStatus, listBody)
+	}
+	privacyStatus, privacyBody := request(http.MethodGet, "/privacy.html", "", "")
+	if privacyStatus != http.StatusOK || !strings.Contains(privacyBody, "<title>Privacy Policy</title>") {
+		t.Fatalf("privacy response = %d %q", privacyStatus, privacyBody)
 	}
 }
 
