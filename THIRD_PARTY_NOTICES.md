@@ -22,7 +22,7 @@ are those selected for the Go 1.27.4/PostgreSQL 19 delivery; `go.mod` and
 | `github.com/mailgun/mailgun-go/v5` | 5.20.0 | Mail delivery client | BSD 3-Clause |
 | `github.com/google/uuid` | 1.6.0 | Mailgun client runtime dependency | BSD 3-Clause |
 | `github.com/oapi-codegen/runtime` | 1.8.0 | Mailgun client runtime dependency | Apache License 2.0 |
-| `golang.org/x/vuln` (`govulncheck`) | 1.1.4 | CI-only vulnerability scanner | BSD 3-Clause |
+| `golang.org/x/vuln` (`govulncheck`) | 1.10.0 | CI-only vulnerability scanner | BSD 3-Clause |
 
 Test-only modules are not shipped as part of the service. The obsolete
 `vendor/` and `Godeps/` snapshots were removed after the clean module-cache
