@@ -30,8 +30,9 @@ func (f *fakePairHistoryRepository) ListMembers(context.Context, string, bool) (
 func TestPairHistoryResolvesInactivePairsAndTriples(t *testing.T) {
 	repository := &fakePairHistoryRepository{
 		rounds: []domain.Round{
-			{ID: 0, ScheduledAt: time.Now(), Pairs: []domain.Pair{{ID1: "a@x", ID2: "b@x"}}},
-			{ID: 1, ScheduledAt: time.Now(), Pairs: []domain.Pair{{ID1: "a@x", ID2: "b@x", ExtraID: "c@x"}}},
+			{ID: 0, ScheduledAt: time.Now(), Pairs: []domain.Pair{}},
+			{ID: 1, ScheduledAt: time.Now(), Pairs: []domain.Pair{{ID1: "a@x", ID2: "b@x"}}},
+			{ID: 2, ScheduledAt: time.Now(), Pairs: []domain.Pair{{ID1: "a@x", ID2: "b@x", ExtraID: "c@x"}}},
 		},
 		members: []domain.Member{
 			{Organization: "o", Email: "a@x", Name: "A", Active: false, Metadata: map[string]string{"team": "1"}, LastRoundWith: map[string]int{"b@x": 1}},
@@ -40,11 +41,11 @@ func TestPairHistoryResolvesInactivePairsAndTriples(t *testing.T) {
 		},
 	}
 	result, err := NewPairHistoryService(repository).ListHistory(context.Background(), "o")
-	if err != nil || len(result.RoundPairs) != 2 || result.RoundPairs[0][0].Member1.Name != "A" || result.RoundPairs[0][0].ExtraMember.Email != "" || result.RoundPairs[1][0].ExtraMember.Name != "C" {
+	if err != nil || len(result.RoundPairs) != 3 || result.RoundPairs[0] == nil || len(result.RoundPairs[0]) != 0 || result.RoundPairs[1][0].Member1.Name != "A" || result.RoundPairs[1][0].ExtraMember.Email != "" || result.RoundPairs[2][0].ExtraMember.Name != "C" {
 		t.Fatalf("ListHistory() = %#v, %v", result, err)
 	}
 
-	repository.rounds[0].Pairs[0].ID2 = "missing@x"
+	repository.rounds[1].Pairs[0].ID2 = "missing@x"
 	_, err = NewPairHistoryService(repository).ListHistory(context.Background(), "o")
 	if !domain.IsIntegrity(err) || !strings.Contains(err.Error(), "missing@x") {
 		t.Fatalf("dangling history error = %v", err)
@@ -106,6 +107,7 @@ func TestPairsHandlerSuccessStatusContentTypeAndExactGroupShape(t *testing.T) {
 		}
 	}
 	result := GetPairsResponse{RoundPairs: [][]GetPairsResponsePair{
+		{},
 		{{
 			Member1: member("a@x", "A", "red", map[string]int{"b@x": 2}),
 			Member2: member("b@x", "B", "blue", map[string]int{"a@x": 2}),
@@ -130,6 +132,7 @@ func TestPairsHandlerSuccessStatusContentTypeAndExactGroupShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]any{"roundPairs": []any{
+		[]any{},
 		[]any{map[string]any{
 			"member1":     pairMemberJSON("o", "a@x", "A", "red", map[string]any{"b@x": float64(2)}),
 			"member2":     pairMemberJSON("o", "b@x", "B", "blue", map[string]any{"a@x": float64(2)}),

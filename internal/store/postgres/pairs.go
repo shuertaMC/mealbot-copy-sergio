@@ -35,8 +35,8 @@ func (r *Repository) ListPairs(ctx context.Context, organization string) ([]doma
 		SELECT r.organization, r.id, r.scheduled_date, r.done,
 		       p.id1, p.id2, p.extra_id
 		FROM rounds r
-		JOIN pairs p ON p.organization = r.organization AND p.round = r.id
-		WHERE r.organization = $1
+		LEFT JOIN pairs p ON p.organization = r.organization AND p.round = r.id
+		WHERE r.organization = $1 AND r.done = true
 		ORDER BY r.id, p.id1, p.id2`, organization)
 	if err != nil {
 		return nil, mapDatabaseError("list pairs", err)
@@ -46,16 +46,12 @@ func (r *Repository) ListPairs(ctx context.Context, organization string) ([]doma
 	index := make(map[int]int)
 	for rows.Next() {
 		var round domain.Round
-		var pair domain.Pair
-		var extra sql.NullString
+		var id1, id2, extra sql.NullString
 		if err := rows.Scan(
 			&round.Organization, &round.ID, &round.ScheduledAt, &round.Done,
-			&pair.ID1, &pair.ID2, &extra,
+			&id1, &id2, &extra,
 		); err != nil {
 			return nil, mapDatabaseError("list pairs", err)
-		}
-		if extra.Valid {
-			pair.ExtraID = extra.String
 		}
 		position, exists := index[round.ID]
 		if !exists {
@@ -64,6 +60,16 @@ func (r *Repository) ListPairs(ctx context.Context, organization string) ([]doma
 			position = len(rounds)
 			index[round.ID] = position
 			rounds = append(rounds, round)
+		}
+		if !id1.Valid || !id2.Valid {
+			if id1.Valid || id2.Valid || extra.Valid {
+				return nil, domain.NewIntegrityError("list pairs", fmt.Sprintf("organization %q round %d contains incomplete pair data", organization, round.ID), nil)
+			}
+			continue
+		}
+		pair := domain.Pair{ID1: id1.String, ID2: id2.String}
+		if extra.Valid {
+			pair.ExtraID = extra.String
 		}
 		rounds[position].Pairs = append(rounds[position].Pairs, pair)
 	}

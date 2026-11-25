@@ -135,38 +135,43 @@ func TestPostgresRepositoryIntegration(t *testing.T) {
 	}
 	round1, _ := repository.AddRound(ctx, organization.Name, base.Add(time.Hour))
 	round2, _ := repository.AddRound(ctx, organization.Name, base.Add(2*time.Hour))
+	round3, _ := repository.AddRound(ctx, organization.Name, base.Add(3*time.Hour))
 	newTime := base.Add(90 * time.Minute)
 	if err := repository.RescheduleRound(ctx, organization.Name, round1.ID, newTime); err != nil {
 		t.Fatalf("RescheduleRound: %v", err)
 	}
 	pairAB, _ := domain.NewPair(memberA.Email, memberB.Email)
 	triple, _ := domain.NewPair(memberA.Email, memberB.Email, memberC.Email)
-	if err := repository.PersistPairings(ctx, organization.Name, round1.ID, []domain.Pair{pairAB}); err != nil {
+	if err := repository.PersistPairings(ctx, organization.Name, round0.ID, nil); err != nil {
+		t.Fatalf("PersistPairings empty: %v", err)
+	}
+	if err := repository.PersistPairings(ctx, organization.Name, round2.ID, []domain.Pair{pairAB}); err != nil {
 		t.Fatalf("PersistPairings pair: %v", err)
 	}
-	if err := repository.PersistPairings(ctx, organization.Name, round2.ID, []domain.Pair{triple}); err != nil {
+	if err := repository.PersistPairings(ctx, organization.Name, round3.ID, []domain.Pair{triple}); err != nil {
 		t.Fatalf("PersistPairings triple: %v", err)
 	}
-	if err := repository.DeleteRound(ctx, organization.Name, round0.ID); err != nil {
+	if err := repository.DeleteRound(ctx, organization.Name, round1.ID); err != nil {
 		t.Fatalf("DeleteRound: %v", err)
 	}
 	rounds, err := repository.ListRounds(ctx, organization.Name)
-	if err != nil || len(rounds) != 2 || rounds[0].ID != 0 || rounds[1].ID != 1 {
+	if err != nil || len(rounds) != 3 || rounds[0].ID != 0 || rounds[1].ID != 1 || rounds[2].ID != 2 {
 		t.Fatalf("compacted ListRounds = %#v, %v", rounds, err)
 	}
 	pairRounds, err := repository.ListPairs(ctx, organization.Name)
-	if err != nil || len(pairRounds) != 2 || pairRounds[0].ID != 0 || pairRounds[1].ID != 1 {
+	if err != nil || len(pairRounds) != 3 || pairRounds[0].ID != 0 || len(pairRounds[0].Pairs) != 0 ||
+		pairRounds[1].ID != 1 || len(pairRounds[1].Pairs) != 1 || pairRounds[2].ID != 2 || len(pairRounds[2].Pairs) != 1 {
 		t.Fatalf("compacted ListPairs = %#v, %v", pairRounds, err)
 	}
 	allMembers, _ = repository.ListMembers(ctx, organization.Name, false)
-	assertSymmetricRound(t, allMembers, memberA.Email, memberB.Email, 1)
-	assertSymmetricRound(t, allMembers, memberA.Email, memberC.Email, 1)
+	assertSymmetricRound(t, allMembers, memberA.Email, memberB.Email, 2)
+	assertSymmetricRound(t, allMembers, memberA.Email, memberC.Email, 2)
 
 	if _, err := repository.ReconcileMembers(ctx, organization.Name, []domain.Member{memberA, memberC}); err != nil {
 		t.Fatalf("deactivate historical member: %v", err)
 	}
 	historical, err := repository.ListHistoricalPairs(ctx, organization.Name)
-	if err != nil || len(historical) != 2 || historical[0].Pairs[0].Member2.Active {
+	if err != nil || len(historical) != 3 || len(historical[0].Pairs) != 0 || historical[1].Pairs[0].Member2.Active {
 		t.Fatalf("ListHistoricalPairs = %#v, %v", historical, err)
 	}
 	if err := repository.ReconstructOrganizationHistory(ctx, organization.Name); err != nil {
@@ -218,6 +223,10 @@ func TestPostgresRepositoryIntegration(t *testing.T) {
 
 	if _, err := db.ExecContext(ctx, `ALTER TABLE pairs DROP CONSTRAINT pairs_id2_fkey`); err != nil {
 		t.Fatalf("drop member constraint for corruption test: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE rounds SET done = true WHERE organization = $1 AND id = $2`,
+		organization.Name, rollbackRound.ID); err != nil {
+		t.Fatalf("complete corrupt historical round: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO pairs (organization, round, id1, id2) VALUES ($1, $2, $3, $4)`,

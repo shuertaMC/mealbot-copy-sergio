@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -225,6 +226,39 @@ func TestPairRepositoryMethods(t *testing.T) {
 	}
 }
 
+func TestListPairsPreservesCompletedEmptyRoundsAndExcludesUnfinishedRounds(t *testing.T) {
+	t.Parallel()
+	repository, mock := mockRepository(t)
+	ctx := context.Background()
+	when := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	columns := []string{"organization", "id", "scheduled_date", "done", "id1", "id2", "extra_id"}
+	rows := sqlmock.NewRows(columns).
+		AddRow("org", 0, when, true, nil, nil, nil).
+		AddRow("org", 2, when.Add(2*time.Hour), true, "a@example.test", "b@example.test", nil).
+		AddRow("org", 2, when.Add(2*time.Hour), true, "c@example.test", "d@example.test", "e@example.test")
+	mock.ExpectQuery(`(?s)FROM rounds r\s+LEFT JOIN pairs p ON p\.organization = r\.organization AND p\.round = r\.id\s+WHERE r\.organization = \$1 AND r\.done = true\s+ORDER BY r\.id, p\.id1, p\.id2`).
+		WithArgs("org").
+		WillReturnRows(rows)
+
+	rounds, err := repository.ListPairs(ctx, "org")
+	if err != nil {
+		t.Fatalf("ListPairs: %v", err)
+	}
+	if len(rounds) != 2 || rounds[0].ID != 0 || rounds[1].ID != 2 {
+		t.Fatalf("ListPairs rounds = %#v", rounds)
+	}
+	if rounds[0].Pairs == nil || len(rounds[0].Pairs) != 0 {
+		t.Fatalf("empty completed round pairs = %#v, want non-nil empty slice", rounds[0].Pairs)
+	}
+	wantPairs := []domain.Pair{
+		{ID1: "a@example.test", ID2: "b@example.test"},
+		{ID1: "c@example.test", ID2: "d@example.test", ExtraID: "e@example.test"},
+	}
+	if !reflect.DeepEqual(rounds[1].Pairs, wantPairs) {
+		t.Fatalf("later round pairs = %#v, want %#v", rounds[1].Pairs, wantPairs)
+	}
+}
+
 func TestListHistoricalPairsIncludesInactiveMembers(t *testing.T) {
 	t.Parallel()
 	repository, mock := mockRepository(t)
@@ -232,13 +266,14 @@ func TestListHistoricalPairsIncludesInactiveMembers(t *testing.T) {
 	when := time.Now().UTC()
 	mock.ExpectQuery("SELECT r.organization").WithArgs("org").WillReturnRows(
 		sqlmock.NewRows([]string{"organization", "id", "scheduled_date", "done", "id1", "id2", "extra_id"}).
-			AddRow("org", 0, when, true, "a@example.test", "b@example.test", nil))
+			AddRow("org", 0, when, true, nil, nil, nil).
+			AddRow("org", 1, when.Add(time.Hour), true, "a@example.test", "b@example.test", nil))
 	mock.ExpectQuery("SELECT organization, email, name, metadata, active, last_round_with").WithArgs("org").WillReturnRows(
 		sqlmock.NewRows([]string{"organization", "email", "name", "metadata", "active", "last_round_with"}).
 			AddRow("org", "a@example.test", "A", []byte(`{}`), true, []byte(`{}`)).
 			AddRow("org", "b@example.test", "B", []byte(`{}`), false, []byte(`{}`)))
 	history, err := repository.ListHistoricalPairs(ctx, "org")
-	if err != nil || len(history) != 1 || history[0].Pairs[0].Member2.Active {
+	if err != nil || len(history) != 2 || history[0].Pairs == nil || len(history[0].Pairs) != 0 || history[1].Pairs[0].Member2.Active {
 		t.Fatalf("ListHistoricalPairs = %#v, %v", history, err)
 	}
 }
@@ -627,5 +662,12 @@ func TestRowsErrorIsPropagated(t *testing.T) {
 	mock.ExpectQuery("SELECT name, admin, cross_match_trait").WithArgs("admin").WillReturnRows(rows)
 	if _, err := repository.ListOrganizations(context.Background(), "admin"); !errors.Is(err, rowErr) {
 		t.Fatalf("ListOrganizations rows error = %v", err)
+	}
+	pairRows := sqlmock.NewRows([]string{"organization", "id", "scheduled_date", "done", "id1", "id2", "extra_id"}).
+		AddRow("org", 0, time.Now().UTC(), true, nil, nil, nil).
+		RowError(0, rowErr)
+	mock.ExpectQuery("SELECT r.organization").WithArgs("org").WillReturnRows(pairRows)
+	if _, err := repository.ListPairs(context.Background(), "org"); !errors.Is(err, rowErr) {
+		t.Fatalf("ListPairs rows error = %v", err)
 	}
 }
