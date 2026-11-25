@@ -18,13 +18,16 @@ type ledgerEntry struct {
 }
 
 type driverState struct {
-	mu          sync.Mutex
-	events      []string
-	applied     map[int64]ledgerEntry
-	failSQL     string
-	beginErr    error
-	commitErr   error
-	rollbackErr error
+	mu           sync.Mutex
+	events       []string
+	applied      map[int64]ledgerEntry
+	queryColumns []string
+	queryValues  [][]driver.Value
+	queryRowsErr error
+	failSQL      string
+	beginErr     error
+	commitErr    error
+	rollbackErr  error
 }
 
 func (s *driverState) event(value string) {
@@ -93,8 +96,18 @@ func (c *testConn) ExecContext(_ context.Context, query string, args []driver.Na
 func (c *testConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	compact := strings.Join(strings.Fields(query), " ")
 	c.state.event("query:" + compact)
+	if c.state.failSQL != "" && strings.Contains(query, c.state.failSQL) {
+		return nil, errors.New("injected query failure")
+	}
 	c.state.mu.Lock()
 	defer c.state.mu.Unlock()
+	if strings.Contains(query, "FROM members") && c.state.queryColumns != nil {
+		return &testRows{
+			columns:     append([]string(nil), c.state.queryColumns...),
+			values:      append([][]driver.Value(nil), c.state.queryValues...),
+			terminalErr: c.state.queryRowsErr,
+		}, nil
+	}
 	if strings.Contains(query, "WHERE version = $1") {
 		version := args[0].Value.(int64)
 		entry, ok := c.state.applied[version]
@@ -129,9 +142,11 @@ func (tx *testTx) Rollback() error {
 }
 
 type testRows struct {
-	columns []string
-	values  [][]driver.Value
-	index   int
+	columns     []string
+	values      [][]driver.Value
+	index       int
+	terminalErr error
+	errReturned bool
 }
 
 func (r *testRows) Columns() []string { return r.columns }
@@ -139,6 +154,10 @@ func (r *testRows) Close() error      { return nil }
 
 func (r *testRows) Next(destination []driver.Value) error {
 	if r.index >= len(r.values) {
+		if r.terminalErr != nil && !r.errReturned {
+			r.errReturned = true
+			return r.terminalErr
+		}
 		return io.EOF
 	}
 	copy(destination, r.values[r.index])
