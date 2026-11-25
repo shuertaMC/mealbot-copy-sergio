@@ -25,3 +25,17 @@ func TestCreateOrganizationPreservesLegacyValidationBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateOrganizationPreservesDatabaseErrorTextForHTTPCompatibility(t *testing.T) {
+	db := openDriverDB(&driverState{failSQL: "INSERT INTO organizations"})
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.CreateOrganization(context.Background(), "alpha", "owner@example.com")
+	if err == nil || err.Error() != "injected execution failure" {
+		t.Fatalf("CreateOrganization() error = %v, want exact database error text", err)
+	}
+}

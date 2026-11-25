@@ -31,7 +31,7 @@ func (s *Store) CreateOrganization(ctx context.Context, name, admin string) erro
 		`INSERT INTO organizations (name, admin) VALUES ($1, $2)`,
 		name, admin,
 	); err != nil {
-		return fmt.Errorf("create organization: %w", err)
+		return err
 	}
 	return nil
 }
