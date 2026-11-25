@@ -3,34 +3,15 @@ package mealbot
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
+	internalauth "github.com/johnamadeo/mealbot/internal/auth"
 	"github.com/johnamadeo/mealbot/internal/httpapi"
 )
 
-// Middleware class
-type Middleware struct {
-	MiddlewareHandlers [](func(handler http.Handler) http.Handler)
-}
-
-// Apply : Create a handler where the core handler is wrapped by middleware handlers
-func (mw *Middleware) Apply(
-	coreHandler func(w http.ResponseWriter, r *http.Request),
-) http.Handler {
-	handler := http.Handler(http.HandlerFunc(coreHandler))
-	for _, nextHandler := range mw.MiddlewareHandlers {
-		handler = nextHandler(handler)
-	}
-
-	return handler
-}
-
-// ApplyFake :
-func (mw Middleware) ApplyFake(
-	coreHandler func(w http.ResponseWriter, r *http.Request),
-) http.Handler {
-	return http.Handler(http.HandlerFunc(coreHandler))
-}
+// Middleware is the explicit legacy bridge to internal/httpapi composition.
+type Middleware = httpapi.Middleware
 
 func runTestSequence(testMode bool) {
 	err := createOrganization("ysc", "johnamadeo.daniswara@yale.edu")
@@ -96,27 +77,29 @@ func DispatchCommand(args []string, out io.Writer) bool {
 }
 
 func newServeMux(mw Middleware) *http.ServeMux {
-	serveMux := http.NewServeMux()
-	serveMux.Handle("/members", mw.Apply(MembersHandler))
-	serveMux.Handle("/orgs", mw.Apply(GetOrganizationsHandler))
-	serveMux.Handle("/org", mw.Apply(CreateOrganizationHandler))
-	serveMux.Handle("/crossmatchtrait", mw.Apply(CrossMatchTraitHandler))
-	serveMux.Handle("/rounds", mw.Apply(GetRoundsHandler))
-	serveMux.Handle("/round", mw.Apply(RoundHandler))
-	serveMux.Handle("/pairs", mw.Apply(GetPairsHandler))
-	httpapi.RegisterStatic(serveMux, "./static")
-	return serveMux
+	return httpapi.NewCompatibilityRouter(legacyHandlerSlots(), mw, "./static")
+}
+
+func legacyHandlerSlots() httpapi.Handlers {
+	return httpapi.Handlers{
+		Members:         http.HandlerFunc(MembersHandler),
+		Organizations:   http.HandlerFunc(GetOrganizationsHandler),
+		Organization:    http.HandlerFunc(CreateOrganizationHandler),
+		CrossMatchTrait: http.HandlerFunc(CrossMatchTraitHandler),
+		Rounds:          http.HandlerFunc(GetRoundsHandler),
+		Round:           http.HandlerFunc(RoundHandler),
+		Pairs:           http.HandlerFunc(GetPairsHandler),
+	}
 }
 
 // NewHandler assembles the compatibility HTTP stack for the composition root.
 // Static assets remain outside authentication and CORS middleware.
 func NewHandler() http.Handler {
-	mw := Middleware{
-		MiddlewareHandlers: [](func(handler http.Handler) http.Handler){
-			GetAuthHandler,
-			GetCorsHandler,
-		},
-	}
-
-	return newServeMux(mw)
+	return httpapi.NewRouter(httpapi.RouterConfig{
+		Handlers:        legacyHandlerSlots(),
+		Auth:            internalauth.MiddlewareFunc(GetAuthHandler),
+		CORS:            httpapi.CompatibilityCORS(),
+		Logger:          slog.Default(),
+		StaticDirectory: "./static",
+	})
 }

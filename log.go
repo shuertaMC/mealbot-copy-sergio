@@ -1,28 +1,22 @@
 package mealbot
 
 import (
+	"log/slog"
 	"net/http"
 
-	"github.com/johnamadeo/server"
-	log "github.com/sirupsen/logrus"
+	"github.com/johnamadeo/mealbot/internal/httpapi"
 )
 
+// legacyResponder is confined to the compatibility package. New transport
+// code receives its logger explicitly and has no package-global logging state.
+var legacyResponder = httpapi.NewResponder(slog.Default())
+
 func LogAndWriteErr(w http.ResponseWriter, err error, status int, function string) {
-	log.WithFields(log.Fields{
-		"logger":   "logrus",
-		"status":   status,
-		"function": function,
-	}).Error(err)
-	w.WriteHeader(status)
-	w.Write(server.ErrToBytes(err))
+	legacyResponder.WriteError(w, err, status, function)
 }
 
 func LogAndWrite(w http.ResponseWriter, bytes []byte, status int, function string) {
-	log.WithFields(log.Fields{
-		"logger":   "logrus",
-		"function": function,
-	}).Debug(status)
-	w.Write(bytes)
+	legacyResponder.Write(w, bytes, status, function)
 }
 
 func LogAndWriteStatusBadRequest(w http.ResponseWriter, err error, function string) {

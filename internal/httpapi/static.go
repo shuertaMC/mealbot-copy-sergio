@@ -7,6 +7,9 @@ import "net/http"
 
 // StaticHandler serves tracked assets from a repository-relative directory.
 func StaticHandler(directory string) http.Handler {
+	if directory == "" {
+		directory = "./static"
+	}
 	return http.FileServer(http.Dir(directory))
 }
 
