@@ -1,0 +1,10 @@
+{
+  "name": "mealbot-frontend-tests",
+  "private": true,
+  "scripts": {
+    "test": "playwright test --config=playwright.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.57.0"
+  }
+}
