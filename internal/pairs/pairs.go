@@ -69,8 +69,7 @@ func (h *Handler) GetPairsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	w.Write(bytes)
+	httputil.LogAndWrite(w, bytes, http.StatusOK, function)
 }
 
 // GetPairsFromDB : Get all the pairings for a particular organization
