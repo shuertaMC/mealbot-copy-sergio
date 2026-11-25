@@ -213,7 +213,7 @@ func runWeb(ctx context.Context, cfg config.Config, repository applicationStore,
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       idleTimeout,
 	}
-	if err := serveHTTP(ctx, server, deps.listenAndServe); err != nil {
+	if err := serveHTTP(ctx, server, deps.listenAndServe, server.Shutdown); err != nil {
 		return fmt.Errorf("serve HTTP: %w", err)
 	}
 	return nil
@@ -321,7 +321,7 @@ type utcClock struct{}
 
 func (utcClock) Now() time.Time { return time.Now().UTC() }
 
-func serveHTTP(ctx context.Context, server *http.Server, listen func(*http.Server) error) error {
+func serveHTTP(ctx context.Context, server *http.Server, listen func(*http.Server) error, shutdown func(context.Context) error) error {
 	result := make(chan error, 1)
 	go func() { result <- listen(server) }()
 
@@ -334,7 +334,7 @@ func serveHTTP(ctx context.Context, server *http.Server, listen func(*http.Serve
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), serverShutdownTimeout)
 		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
+		if err := shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("shut down HTTP server: %w", err)
 		}
 		err := <-result

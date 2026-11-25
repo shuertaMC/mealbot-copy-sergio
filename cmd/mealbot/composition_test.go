@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -142,6 +143,210 @@ func TestRunWebAppliesMigrationsBuildsHandlerAndReturnsServerError(t *testing.T)
 	want := []string{"open:postgres://database", "migrate", "store", "handler:./static", "serve", "close"}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestOpenApplicationStoreClosesDatabaseOnCompositionFailure(t *testing.T) {
+	migrationErr := errors.New("migration failed")
+	constructorErr := errors.New("store construction failed")
+	closeErr := errors.New("database close failed")
+	repository := &fakeApplicationStore{}
+
+	tests := []struct {
+		name        string
+		migration   error
+		repository  applicationStore
+		constructor error
+		close       error
+		wantEvents  []string
+		wantPrimary error
+		wantClose   bool
+		wantMessage string
+	}{
+		{
+			name:        "migration failure",
+			migration:   migrationErr,
+			repository:  repository,
+			wantEvents:  []string{"open", "migrate", "close"},
+			wantPrimary: migrationErr,
+		},
+		{
+			name:        "store constructor failure",
+			repository:  repository,
+			constructor: constructorErr,
+			wantEvents:  []string{"open", "migrate", "store", "close"},
+			wantPrimary: constructorErr,
+		},
+		{
+			name:        "nil store",
+			wantEvents:  []string{"open", "migrate", "store", "close"},
+			wantMessage: "construct store: nil store",
+		},
+		{
+			name:        "composition and close failures",
+			migration:   migrationErr,
+			repository:  repository,
+			close:       closeErr,
+			wantEvents:  []string{"open", "migrate", "close"},
+			wantPrimary: migrationErr,
+			wantClose:   true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			database := new(sql.DB)
+			events := make([]string, 0, len(test.wantEvents))
+			deps := dependencies{
+				openDatabase: func(_ context.Context, databaseURL string) (*sql.DB, error) {
+					events = append(events, "open")
+					if databaseURL != "postgres://database" {
+						t.Errorf("database URL = %q", databaseURL)
+					}
+					return database, nil
+				},
+				applyMigrations: func(context.Context, *sql.DB) error {
+					events = append(events, "migrate")
+					return test.migration
+				},
+				newStore: func(*sql.DB) (applicationStore, error) {
+					events = append(events, "store")
+					return test.repository, test.constructor
+				},
+				closeDatabase: func(got *sql.DB) error {
+					events = append(events, "close")
+					if got != database {
+						t.Errorf("closed database %p, want %p", got, database)
+					}
+					return test.close
+				},
+			}
+
+			gotDatabase, gotRepository, err := openApplicationStore(
+				context.Background(),
+				config.Config{DatabaseURL: "postgres://database"},
+				deps,
+			)
+			if gotDatabase != nil || gotRepository != nil {
+				t.Fatalf("result = (%p, %v), want both nil", gotDatabase, gotRepository)
+			}
+			if err == nil {
+				t.Fatal("openApplicationStore returned nil error")
+			}
+			if test.wantPrimary != nil && !errors.Is(err, test.wantPrimary) {
+				t.Errorf("error = %v, want primary cause %v", err, test.wantPrimary)
+			}
+			if test.wantClose && !errors.Is(err, closeErr) {
+				t.Errorf("error = %v, want close cause %v", err, closeErr)
+			}
+			if test.wantMessage != "" && !strings.Contains(err.Error(), test.wantMessage) {
+				t.Errorf("error = %v, want message %q", err, test.wantMessage)
+			}
+			if !reflect.DeepEqual(events, test.wantEvents) {
+				t.Errorf("events = %#v, want %#v", events, test.wantEvents)
+			}
+		})
+	}
+}
+
+func TestServeHTTPShutsDownAfterCancellation(t *testing.T) {
+	listenerErr := errors.New("listener failed after shutdown")
+	shutdownErr := errors.New("shutdown failed")
+	tests := []struct {
+		name           string
+		shutdownErr    error
+		listenerErr    error
+		wantErr        error
+		wantErrMessage string
+	}{
+		{
+			name:        "server closed",
+			listenerErr: http.ErrServerClosed,
+		},
+		{
+			name:           "shutdown failure",
+			shutdownErr:    shutdownErr,
+			wantErr:        shutdownErr,
+			wantErrMessage: "shut down HTTP server",
+		},
+		{
+			name:        "listener failure after shutdown",
+			listenerErr: listenerErr,
+			wantErr:     listenerErr,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			listenerStarted := make(chan struct{})
+			listenerResult := make(chan error, 1)
+			listenerDone := make(chan struct{})
+			shutdownCalls := 0
+			var deadlineErr error
+
+			listen := func(*http.Server) error {
+				close(listenerStarted)
+				defer close(listenerDone)
+				return <-listenerResult
+			}
+			shutdown := func(shutdownCtx context.Context) error {
+				shutdownCalls++
+				deadline, ok := shutdownCtx.Deadline()
+				if !ok {
+					deadlineErr = errors.New("shutdown context has no deadline")
+				} else if remaining := time.Until(deadline); remaining <= 0 || remaining > serverShutdownTimeout {
+					deadlineErr = fmt.Errorf("shutdown deadline remaining = %v", remaining)
+				}
+				if test.shutdownErr == nil {
+					listenerResult <- test.listenerErr
+				}
+				return test.shutdownErr
+			}
+			t.Cleanup(func() {
+				select {
+				case listenerResult <- http.ErrServerClosed:
+				default:
+				}
+				select {
+				case <-listenerDone:
+				case <-time.After(time.Second):
+					t.Error("listener goroutine did not exit")
+				}
+			})
+
+			result := make(chan error, 1)
+			go func() {
+				result <- serveHTTP(ctx, &http.Server{}, listen, shutdown)
+			}()
+
+			select {
+			case <-listenerStarted:
+			case <-time.After(time.Second):
+				t.Fatal("listener did not start")
+			}
+			cancel()
+
+			var err error
+			select {
+			case err = <-result:
+			case <-time.After(time.Second):
+				t.Fatal("serveHTTP did not return")
+			}
+			if !errors.Is(err, test.wantErr) {
+				t.Errorf("serveHTTP error = %v, want %v", err, test.wantErr)
+			}
+			if test.wantErrMessage != "" && !strings.Contains(err.Error(), test.wantErrMessage) {
+				t.Errorf("serveHTTP error = %v, want message %q", err, test.wantErrMessage)
+			}
+			if shutdownCalls != 1 {
+				t.Errorf("shutdown calls = %d, want 1", shutdownCalls)
+			}
+			if deadlineErr != nil {
+				t.Error(deadlineErr)
+			}
+		})
 	}
 }
 
