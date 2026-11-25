@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -50,21 +49,6 @@ func (s *fakeRoundStore) DeleteRound(_ context.Context, organization string, rou
 	return s.deleteErr
 }
 
-func assertRoundHTTP(t *testing.T, handler http.Handler, method, target string, status int, body, contentType string) {
-	t.Helper()
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(method, target, nil))
-	if recorder.Code != status {
-		t.Fatalf("status = %d, want %d (body %q)", recorder.Code, status, recorder.Body.String())
-	}
-	if got := recorder.Body.String(); got != body {
-		t.Fatalf("body = %q, want %q", got, body)
-	}
-	if got := recorder.Header().Get("Content-Type"); got != contentType {
-		t.Fatalf("Content-Type = %q, want %q", got, contentType)
-	}
-}
-
 func TestRoundHandlersGetCompatibility(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -83,7 +67,7 @@ func TestRoundHandlersGetCompatibility(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := &fakeRoundStore{rounds: test.rounds}
 			handlers := NewRoundHandlers(store, NewResponder(nil))
-			assertRoundHTTP(t, http.HandlerFunc(handlers.Get), http.MethodGet, test.target, test.wantStatus, test.wantBody, test.wantType)
+			assertHTTPResponse(t, http.HandlerFunc(handlers.Get), http.MethodGet, test.target, test.wantStatus, test.wantBody, test.wantType)
 			if store.listedOrg != test.wantOrg {
 				t.Fatalf("listed organization = %q, want %q", store.listedOrg, test.wantOrg)
 			}
@@ -93,45 +77,31 @@ func TestRoundHandlersGetCompatibility(t *testing.T) {
 
 func TestRoundsEndpointMethodRestriction(t *testing.T) {
 	handler := http.HandlerFunc(NewRoundHandlers(&fakeRoundStore{}, NewResponder(nil)).Get)
-	assertRoundHTTP(t, handler, http.MethodPost, "/rounds?org=alpha", http.StatusMethodNotAllowed, `{"Message":"Only GET requests are allowed at this route"}`, "")
+	assertHTTPResponse(t, handler, http.MethodPost, "/rounds?org=alpha", http.StatusMethodNotAllowed, `{"Message":"Only GET requests are allowed at this route"}`, "")
 }
 
 func TestRoundsEndpointRepositoryFailure(t *testing.T) {
 	t.Run("store error", func(t *testing.T) {
 		handler := http.HandlerFunc(NewRoundHandlers(&fakeRoundStore{listErr: errors.New("round failure")}, NewResponder(nil)).Get)
-		assertRoundHTTP(t, handler, http.MethodGet, "/rounds?org=alpha", http.StatusInternalServerError, `{"Message":"round failure"}`, "")
+		assertHTTPResponse(t, handler, http.MethodGet, "/rounds?org=alpha", http.StatusInternalServerError, `{"Message":"round failure"}`, "")
 	})
 	t.Run("missing store", func(t *testing.T) {
 		handler := http.HandlerFunc(NewRoundHandlers(nil, NewResponder(nil)).Get)
-		assertRoundHTTP(t, handler, http.MethodGet, "/rounds?org=alpha", http.StatusInternalServerError, `{"Message":"round store is unavailable"}`, "")
+		assertHTTPResponse(t, handler, http.MethodGet, "/rounds?org=alpha", http.StatusInternalServerError, `{"Message":"round store is unavailable"}`, "")
 	})
 }
 
 func TestRoundHandlersGetQueryFailures(t *testing.T) {
-	tests := []struct {
-		name   string
-		method string
-		target string
-		store  RoundStore
-		status int
-		body   string
-	}{
-		{"missing organization", http.MethodGet, "/rounds", &fakeRoundStore{}, http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`},
-		{"duplicate organization", http.MethodGet, "/rounds?org=one&org=two", &fakeRoundStore{}, http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			handlers := NewRoundHandlers(test.store, NewResponder(nil))
-			assertRoundHTTP(t, http.HandlerFunc(handlers.Get), test.method, test.target, test.status, test.body, "")
-		})
-	}
+	assertGetOrganizationQueryFailures(t, "/rounds", func() http.Handler {
+		return http.HandlerFunc(NewRoundHandlers(&fakeRoundStore{}, NewResponder(nil)).Get)
+	})
 }
 
 func TestRoundHandlersDispatcherCompatibility(t *testing.T) {
 	t.Run("missing roundId adds", func(t *testing.T) {
 		store := &fakeRoundStore{}
 		handler := NewRoundHandlers(store, NewResponder(nil))
-		assertRoundHTTP(t, handler, http.MethodPost, "/round?org=alpha&round=tomorrow", http.StatusOK, `{"Message":"Successfully scheduled a new round"}`, "text/plain; charset=utf-8")
+		assertHTTPResponse(t, handler, http.MethodPost, "/round?org=alpha&round=tomorrow", http.StatusOK, `{"Message":"Successfully scheduled a new round"}`, "text/plain; charset=utf-8")
 		if store.addCalls != 1 || store.addedOrg != "alpha" || store.addedDate != "tomorrow" || store.rescheduleCalls != 0 {
 			t.Fatalf("add calls=%d org=%q date=%q reschedules=%d", store.addCalls, store.addedOrg, store.addedDate, store.rescheduleCalls)
 		}
@@ -140,7 +110,7 @@ func TestRoundHandlersDispatcherCompatibility(t *testing.T) {
 	t.Run("duplicate roundId adds", func(t *testing.T) {
 		store := &fakeRoundStore{}
 		handler := NewRoundHandlers(store, NewResponder(nil))
-		assertRoundHTTP(t, handler, http.MethodPost, "/round?org=alpha&round=tomorrow&roundId=1&roundId=2", http.StatusOK, `{"Message":"Successfully scheduled a new round"}`, "text/plain; charset=utf-8")
+		assertHTTPResponse(t, handler, http.MethodPost, "/round?org=alpha&round=tomorrow&roundId=1&roundId=2", http.StatusOK, `{"Message":"Successfully scheduled a new round"}`, "text/plain; charset=utf-8")
 		if store.addCalls != 1 || store.rescheduleCalls != 0 {
 			t.Fatalf("add calls=%d reschedule calls=%d", store.addCalls, store.rescheduleCalls)
 		}
@@ -149,7 +119,7 @@ func TestRoundHandlersDispatcherCompatibility(t *testing.T) {
 	t.Run("unique roundId reschedules", func(t *testing.T) {
 		store := &fakeRoundStore{}
 		handler := NewRoundHandlers(store, NewResponder(nil))
-		assertRoundHTTP(t, handler, http.MethodPost, "/round?org=alpha&round=later&roundId=3", http.StatusOK, `{"Message":"Succesfully changed date of the round"}`, "text/plain; charset=utf-8")
+		assertHTTPResponse(t, handler, http.MethodPost, "/round?org=alpha&round=later&roundId=3", http.StatusOK, `{"Message":"Succesfully changed date of the round"}`, "text/plain; charset=utf-8")
 		if store.rescheduleCalls != 1 || store.rescheduledOrg != "alpha" || store.rescheduledDate != "later" || store.rescheduledID != 3 || store.addCalls != 0 {
 			t.Fatalf("reschedule calls=%d values=%q/%q/%d add calls=%d", store.rescheduleCalls, store.rescheduledOrg, store.rescheduledDate, store.rescheduledID, store.addCalls)
 		}
@@ -158,7 +128,7 @@ func TestRoundHandlersDispatcherCompatibility(t *testing.T) {
 	t.Run("delete removes", func(t *testing.T) {
 		store := &fakeRoundStore{}
 		handler := NewRoundHandlers(store, NewResponder(nil))
-		assertRoundHTTP(t, handler, http.MethodDelete, "/round?org=alpha&roundId=4", http.StatusOK, `{"Message":"Successfully removed round"}`, "text/plain; charset=utf-8")
+		assertHTTPResponse(t, handler, http.MethodDelete, "/round?org=alpha&roundId=4", http.StatusOK, `{"Message":"Successfully removed round"}`, "text/plain; charset=utf-8")
 		if store.deleteCalls != 1 || store.deletedOrg != "alpha" || store.deletedID != 4 {
 			t.Fatalf("delete calls=%d values=%q/%d", store.deleteCalls, store.deletedOrg, store.deletedID)
 		}
@@ -169,7 +139,7 @@ func TestRoundEndpointMethodRestrictions(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodPatch} {
 		t.Run(method, func(t *testing.T) {
 			handler := NewRoundHandlers(&fakeRoundStore{}, NewResponder(nil))
-			assertRoundHTTP(t, handler, method, "/round?org=alpha", http.StatusMethodNotAllowed, `{"Message":"Only POST and DELETE requests are allowed at this route"}`, "")
+			assertHTTPResponse(t, handler, method, "/round?org=alpha", http.StatusMethodNotAllowed, `{"Message":"Only POST and DELETE requests are allowed at this route"}`, "")
 		})
 	}
 }
@@ -177,15 +147,15 @@ func TestRoundEndpointMethodRestrictions(t *testing.T) {
 func TestRoundEndpointRepositoryFailures(t *testing.T) {
 	t.Run("POST add", func(t *testing.T) {
 		handler := NewRoundHandlers(&fakeRoundStore{addErr: errors.New("add failure")}, NewResponder(nil))
-		assertRoundHTTP(t, handler, http.MethodPost, "/round?org=alpha&round=now", http.StatusBadRequest, `{"Message":"add failure"}`, "")
+		assertHTTPResponse(t, handler, http.MethodPost, "/round?org=alpha&round=now", http.StatusBadRequest, `{"Message":"add failure"}`, "")
 	})
 	t.Run("POST reschedule", func(t *testing.T) {
 		handler := NewRoundHandlers(&fakeRoundStore{rescheduleErr: errors.New("reschedule failure")}, NewResponder(nil))
-		assertRoundHTTP(t, handler, http.MethodPost, "/round?org=alpha&round=now&roundId=1", http.StatusInternalServerError, `{"Message":"reschedule failure"}`, "")
+		assertHTTPResponse(t, handler, http.MethodPost, "/round?org=alpha&round=now&roundId=1", http.StatusInternalServerError, `{"Message":"reschedule failure"}`, "")
 	})
 	t.Run("DELETE", func(t *testing.T) {
 		handler := NewRoundHandlers(&fakeRoundStore{deleteErr: errors.New("delete failure")}, NewResponder(nil))
-		assertRoundHTTP(t, handler, http.MethodDelete, "/round?org=alpha&roundId=1", http.StatusInternalServerError, `{"Message":"delete failure"}`, "")
+		assertHTTPResponse(t, handler, http.MethodDelete, "/round?org=alpha&roundId=1", http.StatusInternalServerError, `{"Message":"delete failure"}`, "")
 	})
 }
 
@@ -215,7 +185,7 @@ func TestRoundHandlersMutationInputFailures(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			handler := NewRoundHandlers(test.store, NewResponder(nil))
-			assertRoundHTTP(t, handler, test.method, test.target, test.status, test.body, "")
+			assertHTTPResponse(t, handler, test.method, test.target, test.status, test.body, "")
 		})
 	}
 }
@@ -224,7 +194,7 @@ func TestRoundHandlersAcceptEmptyMutationValuesOtherThanIDs(t *testing.T) {
 	t.Run("add", func(t *testing.T) {
 		store := &fakeRoundStore{}
 		handler := NewRoundHandlers(store, NewResponder(nil))
-		assertRoundHTTP(t, handler, http.MethodPost, "/round?org=&round=", http.StatusOK, `{"Message":"Successfully scheduled a new round"}`, "text/plain; charset=utf-8")
+		assertHTTPResponse(t, handler, http.MethodPost, "/round?org=&round=", http.StatusOK, `{"Message":"Successfully scheduled a new round"}`, "text/plain; charset=utf-8")
 		if store.addedOrg != "" || store.addedDate != "" {
 			t.Fatalf("add values = %q/%q, want empty", store.addedOrg, store.addedDate)
 		}
@@ -232,7 +202,7 @@ func TestRoundHandlersAcceptEmptyMutationValuesOtherThanIDs(t *testing.T) {
 	t.Run("reschedule", func(t *testing.T) {
 		store := &fakeRoundStore{}
 		handler := NewRoundHandlers(store, NewResponder(nil))
-		assertRoundHTTP(t, handler, http.MethodPost, "/round?org=&round=&roundId=0", http.StatusOK, `{"Message":"Succesfully changed date of the round"}`, "text/plain; charset=utf-8")
+		assertHTTPResponse(t, handler, http.MethodPost, "/round?org=&round=&roundId=0", http.StatusOK, `{"Message":"Succesfully changed date of the round"}`, "text/plain; charset=utf-8")
 		if store.rescheduledOrg != "" || store.rescheduledDate != "" || store.rescheduledID != 0 {
 			t.Fatalf("reschedule values = %q/%q/%d, want empty/empty/0", store.rescheduledOrg, store.rescheduledDate, store.rescheduledID)
 		}
@@ -240,7 +210,7 @@ func TestRoundHandlersAcceptEmptyMutationValuesOtherThanIDs(t *testing.T) {
 	t.Run("remove", func(t *testing.T) {
 		store := &fakeRoundStore{}
 		handler := NewRoundHandlers(store, NewResponder(nil))
-		assertRoundHTTP(t, handler, http.MethodDelete, "/round?org=&roundId=0", http.StatusOK, `{"Message":"Successfully removed round"}`, "text/plain; charset=utf-8")
+		assertHTTPResponse(t, handler, http.MethodDelete, "/round?org=&roundId=0", http.StatusOK, `{"Message":"Successfully removed round"}`, "text/plain; charset=utf-8")
 		if store.deletedOrg != "" || store.deletedID != 0 {
 			t.Fatalf("delete values = %q/%d, want empty/0", store.deletedOrg, store.deletedID)
 		}
@@ -249,7 +219,7 @@ func TestRoundHandlersAcceptEmptyMutationValuesOtherThanIDs(t *testing.T) {
 
 func TestRoundHandlersIndividualMethodErrors(t *testing.T) {
 	handlers := NewRoundHandlers(&fakeRoundStore{}, NewResponder(nil))
-	assertRoundHTTP(t, http.HandlerFunc(handlers.Add), http.MethodGet, "/round", http.StatusMethodNotAllowed, `{"Message":"Only POST requests are allowed at this route"}`, "")
-	assertRoundHTTP(t, http.HandlerFunc(handlers.Remove), http.MethodPost, "/round", http.StatusMethodNotAllowed, `{"Message":"Only DELETE requests are allowed at this route"}`, "")
-	assertRoundHTTP(t, http.HandlerFunc(handlers.Reschedule), http.MethodGet, "/round", http.StatusMethodNotAllowed, "Only POST requests are allowed at this route", "")
+	assertHTTPResponse(t, http.HandlerFunc(handlers.Add), http.MethodGet, "/round", http.StatusMethodNotAllowed, `{"Message":"Only POST requests are allowed at this route"}`, "")
+	assertHTTPResponse(t, http.HandlerFunc(handlers.Remove), http.MethodPost, "/round", http.StatusMethodNotAllowed, `{"Message":"Only DELETE requests are allowed at this route"}`, "")
+	assertHTTPResponse(t, http.HandlerFunc(handlers.Reschedule), http.MethodGet, "/round", http.StatusMethodNotAllowed, "Only POST requests are allowed at this route", "")
 }

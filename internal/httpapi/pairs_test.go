@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"testing"
 
@@ -20,21 +19,6 @@ type fakePairStore struct {
 func (s *fakePairStore) PairHistory(_ context.Context, organization string) ([][]store.HistoricalPair, error) {
 	s.organization = organization
 	return s.history, s.err
-}
-
-func assertPairHTTP(t *testing.T, handler http.Handler, method, target string, status int, body, contentType string) {
-	t.Helper()
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(method, target, nil))
-	if recorder.Code != status {
-		t.Fatalf("status = %d, want %d (body %q)", recorder.Code, status, recorder.Body.String())
-	}
-	if got := recorder.Body.String(); got != body {
-		t.Fatalf("body = %q, want %q", got, body)
-	}
-	if got := recorder.Header().Get("Content-Type"); got != contentType {
-		t.Fatalf("Content-Type = %q, want %q", got, contentType)
-	}
 }
 
 func TestPairHandlersExactMemberAndExtraMemberRepresentation(t *testing.T) {
@@ -72,7 +56,7 @@ func TestPairHandlersExactMemberAndExtraMemberRepresentation(t *testing.T) {
 	}, {}}}
 	handlers := NewPairHandlers(storeFake, NewResponder(nil))
 	want := `{"roundPairs":[[{"member1":{"Organization":"alpha","email":"first@example.com","name":"First","Metadata":{"cohort":"2025","team":"red"},"LastRoundWith":{"second@example.com":0}},"member2":{"Organization":"alpha","email":"second@example.com","name":"Second","Metadata":{},"LastRoundWith":{}},"extraMember":{"Organization":"","email":"","name":"","Metadata":null,"LastRoundWith":null}},{"member1":{"Organization":"alpha","email":"first@example.com","name":"First","Metadata":{"cohort":"2025","team":"red"},"LastRoundWith":{"second@example.com":0}},"member2":{"Organization":"alpha","email":"second@example.com","name":"Second","Metadata":{},"LastRoundWith":{}},"extraMember":{"Organization":"","email":"","name":"","Metadata":null,"LastRoundWith":null}},{"member1":{"Organization":"alpha","email":"first@example.com","name":"First","Metadata":{"cohort":"2025","team":"red"},"LastRoundWith":{"second@example.com":0}},"member2":{"Organization":"alpha","email":"second@example.com","name":"Second","Metadata":{},"LastRoundWith":{}},"extraMember":{"Organization":"","email":"","name":"","Metadata":null,"LastRoundWith":null}},{"member1":{"Organization":"alpha","email":"first@example.com","name":"First","Metadata":{"cohort":"2025","team":"red"},"LastRoundWith":{"second@example.com":0}},"member2":{"Organization":"alpha","email":"second@example.com","name":"Second","Metadata":{},"LastRoundWith":{}},"extraMember":{"Organization":"alpha","email":"extra@example.com","name":"Extra","Metadata":{"cohort":"2027"},"LastRoundWith":{"first@example.com":0}}}],[]]}`
-	assertPairHTTP(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=alpha", http.StatusOK, want, "")
+	assertHTTPResponse(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=alpha", http.StatusOK, want, "")
 	if storeFake.organization != "alpha" {
 		t.Fatalf("organization = %q, want alpha", storeFake.organization)
 	}
@@ -108,51 +92,37 @@ func TestPairHandlersNilAndEmptyHistories(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			handlers := NewPairHandlers(&fakePairStore{history: test.history}, NewResponder(nil))
-			assertPairHTTP(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=alpha", http.StatusOK, test.body, "")
+			assertHTTPResponse(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=alpha", http.StatusOK, test.body, "")
 		})
 	}
 }
 
 func TestPairsEndpointMethodRestriction(t *testing.T) {
 	handlers := NewPairHandlers(&fakePairStore{}, NewResponder(nil))
-	assertPairHTTP(t, http.HandlerFunc(handlers.Get), http.MethodPost, "/pairs?org=alpha", http.StatusMethodNotAllowed, `{"Message":"Only GET requests are allowed at this route"}`, "")
+	assertHTTPResponse(t, http.HandlerFunc(handlers.Get), http.MethodPost, "/pairs?org=alpha", http.StatusMethodNotAllowed, `{"Message":"Only GET requests are allowed at this route"}`, "")
 }
 
 func TestPairsEndpointRepositoryFailure(t *testing.T) {
 	t.Run("store error", func(t *testing.T) {
 		handlers := NewPairHandlers(&fakePairStore{err: errors.New("pair failure")}, NewResponder(nil))
-		assertPairHTTP(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=alpha", http.StatusInternalServerError, `{"Message":"pair failure"}`, "")
+		assertHTTPResponse(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=alpha", http.StatusInternalServerError, `{"Message":"pair failure"}`, "")
 	})
 	t.Run("missing store", func(t *testing.T) {
 		handlers := NewPairHandlers(nil, NewResponder(nil))
-		assertPairHTTP(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=alpha", http.StatusInternalServerError, `{"Message":"pair store is unavailable"}`, "")
+		assertHTTPResponse(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=alpha", http.StatusInternalServerError, `{"Message":"pair store is unavailable"}`, "")
 	})
 }
 
 func TestPairHandlersQueryFailures(t *testing.T) {
-	tests := []struct {
-		name   string
-		method string
-		target string
-		store  PairStore
-		status int
-		body   string
-	}{
-		{"missing organization", http.MethodGet, "/pairs", &fakePairStore{}, http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`},
-		{"duplicate organization", http.MethodGet, "/pairs?org=one&org=two", &fakePairStore{}, http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			handlers := NewPairHandlers(test.store, NewResponder(nil))
-			assertPairHTTP(t, http.HandlerFunc(handlers.Get), test.method, test.target, test.status, test.body, "")
-		})
-	}
+	assertGetOrganizationQueryFailures(t, "/pairs", func() http.Handler {
+		return http.HandlerFunc(NewPairHandlers(&fakePairStore{}, NewResponder(nil)).Get)
+	})
 }
 
 func TestPairHandlersAcceptEmptyOrganization(t *testing.T) {
 	storeFake := &fakePairStore{history: [][]store.HistoricalPair{}}
 	handlers := NewPairHandlers(storeFake, NewResponder(nil))
-	assertPairHTTP(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=", http.StatusOK, `{"roundPairs":[]}`, "")
+	assertHTTPResponse(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=", http.StatusOK, `{"roundPairs":[]}`, "")
 	if storeFake.organization != "" {
 		t.Fatalf("organization = %q, want empty", storeFake.organization)
 	}
