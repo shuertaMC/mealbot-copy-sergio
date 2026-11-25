@@ -57,7 +57,7 @@ class TestRoundsM2:
     def test_rounds_wrong_method(self, app, auth):
         assert requests.post(app + "/rounds", params={"org": "x"}, headers=auth, timeout=T).status_code == 405
 
-    def test_rounds_requires_auth(self, app, auth, org):
+    def test_rounds_requires_auth(self, app, org):
         r = requests.get(app + "/rounds", params={"org": org[0]}, timeout=T)
         assert r.text == ""  # handler not executed (auth middleware writes no body)
 
