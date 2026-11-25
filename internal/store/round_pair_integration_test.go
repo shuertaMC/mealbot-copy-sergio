@@ -73,6 +73,9 @@ VALUES ('rounds', 'a@example.com', 'b@example.com', NULL, 2)
 		if pairRound != 1 {
 			t.Fatalf("renumbered pair round = %d, want 1", pairRound)
 		}
+		if _, err := db.ExecContext(ctx, `UPDATE rounds SET done = TRUE WHERE organization = 'rounds'`); err != nil {
+			t.Fatal(err)
+		}
 
 		seedOrganizationAndMembers(t, ctx, db, "due", "a@example.com", "b@example.com")
 		boundary := time.Date(2026, 4, 5, 6, 7, 8, 0, time.UTC)
