@@ -28,6 +28,10 @@ type SetCrossMatchTraitRequestBody struct {
 	Trait string `json:"trait"`
 }
 
+var getOrganizationsForHandler = getOrganizations
+var createOrganizationForHandler = createOrganization
+var setCrossMatchTraitForHandler = setCrossMatchTrait
+
 // GetOrganizationsHandler : HTTP Handler for fetching all the organizations an admin manages
 func GetOrganizationsHandler(w http.ResponseWriter, r *http.Request) {
 	function := "GetOrganizationsHandler"
@@ -52,7 +56,7 @@ func GetOrganizationsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	organizations, err := getOrganizations(queries[0])
+	organizations, err := getOrganizationsForHandler(queries[0])
 	if err != nil {
 		LogAndWriteStatusInternalServerError(w, err, function)
 		return
@@ -109,7 +113,7 @@ func CreateOrganizationHandler(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println(body.Organization, admin)
 
-	err = createOrganization(body.Organization, admin)
+	err = createOrganizationForHandler(body.Organization, admin)
 	if err != nil {
 		LogAndWriteStatusInternalServerError(w, err, function)
 		return
@@ -151,7 +155,7 @@ func CrossMatchTraitHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = setCrossMatchTrait(orgname, body.Trait)
+	err = setCrossMatchTraitForHandler(orgname, body.Trait)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write(server.ErrToBytes(err))

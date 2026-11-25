@@ -51,6 +51,12 @@ type GetMembersResponse struct {
 	CrossMatchTrait string           `json:"crossMatchTrait"`
 }
 
+// Handler dependency seams keep the legacy HTTP contract testable without a
+// live database. They deliberately default to the original implementations.
+var getActiveMembersForHandler = getActiveMembersFromDBAsMap
+var getCrossMatchTraitForHandler = GetCrossMatchTrait
+var createMembersFromCSVForHandler = createMembersFromCSV
+
 // MembersHandler : Combined handlers for create and retrieving members
 func MembersHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
@@ -79,7 +85,7 @@ func GetMembersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	members, err := getActiveMembersFromDBAsMap(orgname)
+	members, err := getActiveMembersForHandler(orgname)
 	if err != nil {
 		LogAndWriteStatusInternalServerError(w, err, function)
 		return
@@ -94,7 +100,7 @@ func GetMembersHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	crossMatchTrait, err := GetCrossMatchTrait(orgname)
+	crossMatchTrait, err := getCrossMatchTraitForHandler(orgname)
 	if err != nil {
 		LogAndWriteStatusInternalServerError(w, err, function)
 		return
@@ -166,7 +172,7 @@ func CreateMembersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	members, err := createMembersFromCSV(orgname, filename)
+	members, err := createMembersFromCSVForHandler(orgname, filename)
 	if err != nil {
 		LogAndWriteStatusInternalServerError(w, err, function)
 		return

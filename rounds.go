@@ -23,6 +23,11 @@ type GetRoundsResponse struct {
 	Rounds []string `json:"rounds"`
 }
 
+var addRoundForHandler = addRound
+var getRoundsForHandler = getRoundsFromDB
+var removeRoundForHandler = removeRound
+var rescheduleRoundForHandler = rescheduleRound
+
 // AddRoundHandler : HTTP handler for scheduling a new round on a certain date
 func AddRoundHandler(w http.ResponseWriter, r *http.Request) {
 	function := "AddRoundHandler"
@@ -46,7 +51,7 @@ func AddRoundHandler(w http.ResponseWriter, r *http.Request) {
 	orgname := values[0]
 	roundDate := values[1]
 
-	err = addRound(orgname, roundDate)
+	err = addRoundForHandler(orgname, roundDate)
 	if err != nil {
 		LogAndWriteStatusBadRequest(w, err, function)
 		return
@@ -79,7 +84,7 @@ func GetRoundsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rounds, err := getRoundsFromDB(orgname)
+	rounds, err := getRoundsForHandler(orgname)
 	if err != nil {
 		LogAndWriteStatusInternalServerError(w, err, function)
 		return
@@ -173,7 +178,7 @@ func RemoveRoundHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = removeRound(orgname, roundID)
+	err = removeRoundForHandler(orgname, roundID)
 	if err != nil {
 		LogAndWriteStatusInternalServerError(w, err, function)
 		return
@@ -210,7 +215,7 @@ func RescheduleRoundHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = rescheduleRound(orgname, roundDate, roundID)
+	err = rescheduleRoundForHandler(orgname, roundDate, roundID)
 	if err != nil {
 		LogAndWriteStatusInternalServerError(w, err, function)
 		return

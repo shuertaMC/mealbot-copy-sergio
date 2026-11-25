@@ -130,6 +130,11 @@ func (mm MembersMap) String() string {
 
 type RandomIntGenerator func(int) int
 
+var getMinimalMembersForRound = getMinimalMembersFromDB
+var runPairingAlgorithmForRound = runPairingAlgorithm
+var sendEmailsForRound = sendEmails
+var saveRoundForRound = saveRoundInDB
+
 func runPairingAlgorithm(members MembersMap, roundNum int, genRandomInt RandomIntGenerator) (MembersMap, Round) {
 	memberIds := []string{}
 	for id := range members {
@@ -209,21 +214,21 @@ func runPairingAlgorithm(members MembersMap, roundNum int, genRandomInt RandomIn
 }
 
 func runPairingRound(orgname string, roundNum int, testMode bool) error {
-	members, err := getMinimalMembersFromDB(orgname)
+	members, err := getMinimalMembersForRound(orgname)
 	if err != nil {
 		return err
 	}
 
-	members, round := runPairingAlgorithm(members, roundNum, rand.Intn)
+	members, round := runPairingAlgorithmForRound(members, roundNum, rand.Intn)
 
 	if !testMode {
-		err = sendEmails(orgname, round, members)
+		err = sendEmailsForRound(orgname, round, members)
 		if err != nil {
 			return err
 		}
 	}
 
-	err = saveRoundInDB(round, members, orgname)
+	err = saveRoundForRound(round, members, orgname)
 	if err != nil {
 		return err
 	}

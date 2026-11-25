@@ -21,6 +21,8 @@ type GetPairsResponse struct {
 	RoundPairs [][]GetPairsResponsePair `json:"roundPairs"`
 }
 
+var getPairsForHandler = getPairsFromDB
+
 // GetPairsHandler : HTTP Handler for getting pairings for an organization
 func GetPairsHandler(w http.ResponseWriter, r *http.Request) {
 	function := "GetPairsHandler"
@@ -40,7 +42,7 @@ func GetPairsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	roundPairs, err := getPairsFromDB(orgname)
+	roundPairs, err := getPairsForHandler(orgname)
 	if err != nil {
 		LogAndWriteStatusInternalServerError(w, err, function)
 		return

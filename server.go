@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
@@ -63,35 +64,33 @@ func runTestSequence(testMode bool) {
 	}
 }
 
-func main() {
-	args := os.Args
-	if len(args) == 2 {
-		if args[1] == "pair" {
-			// runTestSequence(true)
-			err := runPairingScheduler(false)
-			if err != nil {
-				fmt.Println(err)
-			}
-			return
-		} else if args[1] == "migrate" {
-			err := migrateToLastRoundWithForPairing()
-			if err != nil {
-				fmt.Println(err)
-			}
-			return
-		} else {
-			fmt.Printf("argument '%s' not recognized", args[1])
-			return
+var runPairingSchedulerForCommand = runPairingScheduler
+var migrateForCommand = migrateToLastRoundWithForPairing
+
+// dispatchCommand handles the legacy one-argument command modes. It returns
+// true when main should exit instead of starting the web server.
+func dispatchCommand(args []string, out io.Writer) bool {
+	if len(args) != 2 {
+		return false
+	}
+
+	switch args[1] {
+	case "pair":
+		if err := runPairingSchedulerForCommand(false); err != nil {
+			fmt.Fprintln(out, err)
 		}
+	case "migrate":
+		if err := migrateForCommand(); err != nil {
+			fmt.Fprintln(out, err)
+		}
+	default:
+		fmt.Fprintf(out, "argument '%s' not recognized", args[1])
 	}
 
-	mw := Middleware{
-		MiddlewareHandlers: [](func(handler http.Handler) http.Handler){
-			GetAuthHandler,
-			GetCorsHandler,
-		},
-	}
+	return true
+}
 
+func newServeMux(mw Middleware) *http.ServeMux {
 	serveMux := http.NewServeMux()
 	serveMux.Handle("/members", mw.Apply(MembersHandler))
 	serveMux.Handle("/orgs", mw.Apply(GetOrganizationsHandler))
@@ -101,6 +100,22 @@ func main() {
 	serveMux.Handle("/round", mw.Apply(RoundHandler))
 	serveMux.Handle("/pairs", mw.Apply(GetPairsHandler))
 	serveMux.Handle("/", http.FileServer(http.Dir("./static")))
+	return serveMux
+}
+
+func main() {
+	if dispatchCommand(os.Args, os.Stdout) {
+		return
+	}
+
+	mw := Middleware{
+		MiddlewareHandlers: [](func(handler http.Handler) http.Handler){
+			GetAuthHandler,
+			GetCorsHandler,
+		},
+	}
+
+	serveMux := newServeMux(mw)
 
 	port := os.Getenv("PORT")
 	if port == "" {
