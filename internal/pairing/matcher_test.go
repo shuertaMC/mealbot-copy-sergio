@@ -23,6 +23,58 @@ func member(id, trait string, history map[string]int) MinimalMember {
 	return MinimalMember{ID: id, Name: id, Trait: trait, LastRoundWith: history}
 }
 
+func TestRunPairingAlgorithmCorrectness(t *testing.T) {
+	members := completeMembers("a@gmail.com", "b@gmail.com", "c@gmail.com")
+	for roundNumber := 0; roundNumber < 3; roundNumber++ {
+		var round Round
+		members, round = Match(members, roundNumber, RandomFunc(func(int) int { return 0 }))
+		if round.Number != roundNumber {
+			t.Fatalf("round number = %d, want %d", round.Number, roundNumber)
+		}
+		if len(round.Pairs) != 1 || len(round.Paired) != 2 {
+			t.Fatalf("odd population produced %d pairs and %d paired members; want 1 pair and 2 members", len(round.Pairs), len(round.Paired))
+		}
+		for pair := range round.Pairs {
+			if pair.ID1 >= pair.ID2 {
+				t.Fatalf("pair IDs are not canonical: %#v", pair)
+			}
+			if pair.ExtraID != "" {
+				t.Fatalf("legacy odd-member pair ExtraID = %q, want empty", pair.ExtraID)
+			}
+			if members[pair.ID1].LastRoundWith[pair.ID2] != roundNumber || members[pair.ID2].LastRoundWith[pair.ID1] != roundNumber {
+				t.Fatalf("history is not symmetric for %#v", pair)
+			}
+		}
+	}
+}
+
+func TestPairingAlgorithmEndToEndTest(t *testing.T) {
+	members := completeMembers("a@example.com", "b@example.com", "c@example.com", "d@example.com")
+	for id, trait := range map[string]string{
+		"a@example.com": "red",
+		"b@example.com": "red",
+		"c@example.com": "blue",
+		"d@example.com": "blue",
+	} {
+		value := members[id]
+		value.Trait = trait
+		members[id] = value
+	}
+	updated, round := Match(members, 7, RandomFunc(func(int) int { return 0 }))
+	want := []Pair{NewPair("a@example.com", "b@example.com"), NewPair("c@example.com", "d@example.com")}
+	if !reflect.DeepEqual(round.DrawOrderedPairs, want) {
+		t.Fatalf("equality-based trait selection pairs = %#v, want %#v", round.DrawOrderedPairs, want)
+	}
+	if len(round.Paired) != len(members) {
+		t.Fatalf("paired members = %d, want %d", len(round.Paired), len(members))
+	}
+	for _, pair := range round.DrawOrderedPairs {
+		if updated[pair.ID1].LastRoundWith[pair.ID2] != 7 || updated[pair.ID2].LastRoundWith[pair.ID1] != 7 {
+			t.Fatalf("pair history is not symmetric for %#v", pair)
+		}
+	}
+}
+
 func TestChoosePartnerCandidatePriority(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -27,24 +27,6 @@ func (f RandomFunc) Intn(n int) int {
 	return f(n)
 }
 
-// Matcher supplies matching behavior to the round service. Production callers
-// normally leave it nil to use Match; the interface exists for the temporary
-// legacy bridge and focused orchestration tests.
-type Matcher interface {
-	Match(MembersMap, int, Random) (MembersMap, Round)
-}
-
-// MatcherFunc adapts a function to Matcher.
-type MatcherFunc func(MembersMap, int, Random) (MembersMap, Round)
-
-// Match calls f, or the package matcher when f is nil.
-func (f MatcherFunc) Match(members MembersMap, round int, random Random) (MembersMap, Round) {
-	if f == nil {
-		return Match(members, round, random)
-	}
-	return f(members, round, random)
-}
-
 // ScheduledRound identifies work without exposing member data.
 type ScheduledRound struct {
 	Organization string
@@ -71,12 +53,6 @@ type RoundStore interface {
 // Notifier delivers one pair notification before a completed round is saved.
 type Notifier interface {
 	Notify(context.Context, string, []string, []string) error
-}
-
-// RoundDelivery is an aggregate delivery seam retained only for compatibility
-// adapters whose legacy contract sends an already-built round at once.
-type RoundDelivery interface {
-	DeliverRound(context.Context, string, Round, MembersMap) error
 }
 
 // RoundProcessor performs one scheduled unit of pairing work.

@@ -29,17 +29,6 @@ type MembersResponse struct {
 	CrossMatchTrait *string          `json:"crossMatchTrait,omitempty"`
 }
 
-// uploadedCSV keeps the client filename available to compatibility adapters
-// without requiring the modern handler or store to persist an upload.
-type uploadedCSV struct {
-	*bytes.Reader
-	filename string
-}
-
-// UploadFilename returns the untrusted client filename. Adapters must sanitize
-// it before any compatibility-only filesystem use.
-func (u *uploadedCSV) UploadFilename() string { return u.filename }
-
 // MemberHandlers owns GET/POST dispatch for /members.
 type MemberHandlers struct {
 	members       MemberStore
@@ -146,7 +135,7 @@ func (h MemberHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	if r.MultipartForm != nil {
 		defer h.responder.Cleanup(function, "multipart form", r.MultipartForm.RemoveAll)
 	}
-	formFile, header, err := r.FormFile("members")
+	formFile, _, err := r.FormFile("members")
 	if err != nil {
 		h.responder.WriteBadRequest(w, err, function)
 		return
@@ -170,10 +159,7 @@ func (h MemberHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		h.responder.WriteInternalServerError(w, errors.New("member store is unavailable"), function)
 		return
 	}
-	plan, err := h.members.SynchronizeMembersCSV(r.Context(), organization, &uploadedCSV{
-		Reader:   bytes.NewReader(contents),
-		filename: header.Filename,
-	})
+	plan, err := h.members.SynchronizeMembersCSV(r.Context(), organization, bytes.NewReader(contents))
 	if err != nil {
 		h.responder.WriteInternalServerError(w, err, function)
 		return

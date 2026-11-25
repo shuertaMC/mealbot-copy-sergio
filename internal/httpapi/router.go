@@ -7,8 +7,8 @@ import (
 	"github.com/johnamadeo/mealbot/internal/auth"
 )
 
-// Handlers are the seven exact legacy API route slots. Route bodies remain
-// independently replaceable while transport assembly moves into this package.
+// Handlers are the seven exact API route slots assembled by the composition
+// root from their injected stores and transport dependencies.
 type Handlers struct {
 	Members         http.Handler
 	Organizations   http.Handler
@@ -66,21 +66,5 @@ func NewRouter(config RouterConfig) *http.ServeMux {
 		mux.Handle(registered.pattern, handler)
 	}
 	RegisterStatic(mux, config.StaticDirectory)
-	return mux
-}
-
-// NewCompatibilityRouter applies an already composed legacy middleware stack
-// to the same route slots. It is an explicit bridge, not a dependency of the
-// modern router.
-func NewCompatibilityRouter(handlers Handlers, middleware Middleware, staticDirectory string) *http.ServeMux {
-	mux := http.NewServeMux()
-	for _, registered := range handlers.routes() {
-		handler := registered.handler
-		if handler == nil {
-			handler = http.NotFoundHandler()
-		}
-		mux.Handle(registered.pattern, middleware.ApplyHandler(handler))
-	}
-	RegisterStatic(mux, staticDirectory)
 	return mux
 }

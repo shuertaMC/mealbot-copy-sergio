@@ -391,19 +391,25 @@ func (f notifierFunc) Notify(ctx context.Context, organization string, emails, n
 }
 
 type fakeApplicationStore struct {
-	dueRoundsFunc   func(context.Context, time.Time) ([]pairing.ScheduledRound, error)
-	loadMembersFunc func(context.Context, string) (pairing.MembersMap, error)
-	saveRoundFunc   func(context.Context, string, pairing.Round, pairing.MembersMap) error
-	reconstructFunc func(context.Context) (store.HistoryReconstructionResult, error)
-	httpCalls       int
+	createOrganizationFunc func(context.Context, string, string) error
+	synchronizeMembersFunc func(context.Context, string, io.Reader) (store.MemberSyncPlan, error)
+	addRoundFunc           func(context.Context, string, string) (int, error)
+	dueRoundsFunc          func(context.Context, time.Time) ([]pairing.ScheduledRound, error)
+	loadMembersFunc        func(context.Context, string) (pairing.MembersMap, error)
+	saveRoundFunc          func(context.Context, string, pairing.Round, pairing.MembersMap) error
+	reconstructFunc        func(context.Context) (store.HistoryReconstructionResult, error)
+	httpCalls              int
 }
 
 func (s *fakeApplicationStore) OrganizationsByAdmin(context.Context, string) ([]string, error) {
 	s.httpCalls++
 	return nil, nil
 }
-func (s *fakeApplicationStore) CreateOrganization(context.Context, string, string) error {
+func (s *fakeApplicationStore) CreateOrganization(ctx context.Context, name, admin string) error {
 	s.httpCalls++
+	if s.createOrganizationFunc != nil {
+		return s.createOrganizationFunc(ctx, name, admin)
+	}
 	return nil
 }
 func (s *fakeApplicationStore) CrossMatchTrait(context.Context, string) (*string, error) {
@@ -418,16 +424,22 @@ func (s *fakeApplicationStore) Members(context.Context, string, bool) ([]store.M
 	s.httpCalls++
 	return nil, nil
 }
-func (s *fakeApplicationStore) SynchronizeMembersCSV(context.Context, string, io.Reader) (store.MemberSyncPlan, error) {
+func (s *fakeApplicationStore) SynchronizeMembersCSV(ctx context.Context, organization string, source io.Reader) (store.MemberSyncPlan, error) {
 	s.httpCalls++
+	if s.synchronizeMembersFunc != nil {
+		return s.synchronizeMembersFunc(ctx, organization, source)
+	}
 	return store.MemberSyncPlan{}, nil
 }
 func (s *fakeApplicationStore) ListRounds(context.Context, string) ([]string, error) {
 	s.httpCalls++
 	return nil, nil
 }
-func (s *fakeApplicationStore) AddRound(context.Context, string, string) (int, error) {
+func (s *fakeApplicationStore) AddRound(ctx context.Context, organization, scheduled string) (int, error) {
 	s.httpCalls++
+	if s.addRoundFunc != nil {
+		return s.addRoundFunc(ctx, organization, scheduled)
+	}
 	return 0, nil
 }
 func (s *fakeApplicationStore) RescheduleRound(context.Context, string, string, int) error {

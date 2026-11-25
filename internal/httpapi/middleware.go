@@ -5,41 +5,6 @@ import (
 	"net/http"
 )
 
-// Middleware preserves the legacy composition shape for temporary adapters.
-// Handlers are wrapped in slice order, so the final entry executes outermost.
-type Middleware struct {
-	MiddlewareHandlers []func(http.Handler) http.Handler
-}
-
-// Apply wraps a route function in the configured middleware.
-func (mw *Middleware) Apply(coreHandler func(http.ResponseWriter, *http.Request)) http.Handler {
-	handler := http.Handler(http.HandlerFunc(coreHandler))
-	if mw == nil {
-		return handler
-	}
-	for _, nextHandler := range mw.MiddlewareHandlers {
-		if nextHandler != nil {
-			handler = nextHandler(handler)
-		}
-	}
-	return handler
-}
-
-// ApplyHandler wraps an existing http.Handler in the configured middleware.
-func (mw Middleware) ApplyHandler(handler http.Handler) http.Handler {
-	for _, nextHandler := range mw.MiddlewareHandlers {
-		if nextHandler != nil {
-			handler = nextHandler(handler)
-		}
-	}
-	return handler
-}
-
-// ApplyFake retains the legacy test seam that bypasses all middleware.
-func (mw Middleware) ApplyFake(coreHandler func(http.ResponseWriter, *http.Request)) http.Handler {
-	return http.HandlerFunc(coreHandler)
-}
-
 type statusRecorder struct {
 	http.ResponseWriter
 	status int

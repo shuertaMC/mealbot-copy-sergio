@@ -1,6 +1,5 @@
-// Package httpapi owns HTTP transport assembly. During the compatibility
-// checkpoint the legacy API handlers remain behind a bridge while static asset
-// serving is already owned here.
+// Package httpapi owns HTTP transport assembly for the API and public static
+// assets.
 package httpapi
 
 import "net/http"
