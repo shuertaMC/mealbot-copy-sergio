@@ -1,3 +1,3 @@
-// Package auth validates Mealbot authentication credentials and supplies HTTP
-// authentication middleware.
+// Package auth validates RS256 access tokens, retrieves and caches JSON Web
+// Keys, and supplies explicit HTTP authentication middleware.
 package auth
