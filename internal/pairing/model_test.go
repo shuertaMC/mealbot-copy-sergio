@@ -54,6 +54,14 @@ func TestUpdateLastRoundWithIsSymmetricAndInitializesMaps(t *testing.T) {
 	}
 }
 
+func TestMembersMapClonePreservesNilHistory(t *testing.T) {
+	members := MembersMap{"a": {ID: "a"}}
+
+	if cloned := members.clone(); cloned["a"].LastRoundWith != nil {
+		t.Fatalf("clone history = %#v, want nil", cloned["a"].LastRoundWith)
+	}
+}
+
 func TestDatabaseBoundaryConversions(t *testing.T) {
 	records := []MemberRecord{{
 		ID: "a", Name: "A", Metadata: map[string]string{"team": "red"}, LastRoundWith: map[string]int{"b": 2},
@@ -65,6 +73,10 @@ func TestDatabaseBoundaryConversions(t *testing.T) {
 	records[0].LastRoundWith["b"] = 8
 	if members["a"].LastRoundWith["b"] != 2 {
 		t.Fatal("MembersFromRecords did not copy history")
+	}
+	nilHistoryMembers := MembersFromRecords([]MemberRecord{{ID: "nil-history"}}, "team")
+	if nilHistoryMembers["nil-history"].LastRoundWith != nil {
+		t.Fatalf("MembersFromRecords nil history = %#v, want nil", nilHistoryMembers["nil-history"].LastRoundWith)
 	}
 	round := NewRound(6)
 	round.AddPair("z", "a")

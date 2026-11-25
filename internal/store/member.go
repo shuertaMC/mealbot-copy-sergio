@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"sort"
 
 	"github.com/johnamadeo/mealbot/internal/pairing"
@@ -151,7 +152,7 @@ func (s *Store) SynchronizeMembers(ctx context.Context, plan MemberSyncPlan) err
 					Organization:  validated.Organization,
 					Email:         email,
 					Name:          input.Name,
-					Metadata:      cloneStringMap(input.Metadata),
+					Metadata:      maps.Clone(input.Metadata),
 					LastRoundWith: make(map[string]int),
 					Active:        true,
 				}
@@ -173,7 +174,7 @@ func (s *Store) SynchronizeMembers(ctx context.Context, plan MemberSyncPlan) err
 			input, present := desired[email]
 			if present {
 				member.Name = input.Name
-				member.Metadata = cloneStringMap(input.Metadata)
+				member.Metadata = maps.Clone(input.Metadata)
 				member.Active = true
 			} else {
 				member.Active = false
@@ -263,14 +264,6 @@ func initializeSymmetricRelationships(members map[string]Member) {
 	}
 }
 
-func cloneStringMap(source map[string]string) map[string]string {
-	result := make(map[string]string, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
-	return result
-}
-
 // LoadMembers implements pairing.MemberLoader using only active rows and the
 // organization's nullable trait.
 func (s *Store) LoadMembers(ctx context.Context, organization string) (pairing.MembersMap, error) {
@@ -291,17 +284,9 @@ func (s *Store) LoadMembers(ctx context.Context, organization string) (pairing.M
 		records = append(records, pairing.MemberRecord{
 			ID:            member.Email,
 			Name:          member.Name,
-			Metadata:      cloneStringMap(member.Metadata),
-			LastRoundWith: cloneIntMap(member.LastRoundWith),
+			Metadata:      maps.Clone(member.Metadata),
+			LastRoundWith: maps.Clone(member.LastRoundWith),
 		})
 	}
 	return pairing.MembersFromRecords(records, traitName), nil
-}
-
-func cloneIntMap(source map[string]int) map[string]int {
-	result := make(map[string]int, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
-	return result
 }

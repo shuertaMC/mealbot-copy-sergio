@@ -1,5 +1,7 @@
 package pairing
 
+import "maps"
+
 // MemberRecord is the persistence-facing member model needed by the pairing
 // boundary. Infrastructure adapters remain responsible for database access.
 type MemberRecord struct {
@@ -14,15 +16,11 @@ type MemberRecord struct {
 func MembersFromRecords(records []MemberRecord, trait string) MembersMap {
 	members := make(MembersMap, len(records))
 	for _, record := range records {
-		history := make(map[string]int, len(record.LastRoundWith))
-		for partner, round := range record.LastRoundWith {
-			history[partner] = round
-		}
 		members[record.ID] = MinimalMember{
 			ID:            record.ID,
 			Name:          record.Name,
 			Trait:         record.Metadata[trait],
-			LastRoundWith: history,
+			LastRoundWith: maps.Clone(record.LastRoundWith),
 		}
 	}
 	return members

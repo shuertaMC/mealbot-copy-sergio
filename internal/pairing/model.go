@@ -2,6 +2,7 @@ package pairing
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 )
@@ -144,11 +145,7 @@ func (members MembersMap) IDs() []string {
 func (members MembersMap) clone() MembersMap {
 	cloned := make(MembersMap, len(members))
 	for id, member := range members {
-		history := make(map[string]int, len(member.LastRoundWith))
-		for partner, round := range member.LastRoundWith {
-			history[partner] = round
-		}
-		member.LastRoundWith = history
+		member.LastRoundWith = maps.Clone(member.LastRoundWith)
 		cloned[id] = member
 	}
 	return cloned
