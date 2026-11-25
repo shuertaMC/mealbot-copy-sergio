@@ -13,37 +13,6 @@ import (
 // Middleware is the explicit legacy bridge to internal/httpapi composition.
 type Middleware = httpapi.Middleware
 
-func runTestSequence(testMode bool) {
-	err := createOrganization("ysc", "johnamadeo.daniswara@yale.edu")
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	_, err = createMembersFromCSV("ysc", "./csv/test_john3.csv")
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	i := 0
-	for i < 2 {
-		err = addRound("ysc", fmt.Sprintf("2019-01-02 %d:55:00", i))
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		// NOTE: Do you want to actually send out emails?
-		err = runPairingRound("ysc", i, testMode)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		i++
-	}
-}
-
 var runPairingSchedulerForCommand = runPairingScheduler
 var migrateForCommand = migrateToLastRoundWithForPairing
 
