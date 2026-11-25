@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: 1.27.4
+  GOVULNCHECK_VERSION: v1.1.4
+  # Prove the module graph while the legacy vendor snapshot still exists.
+  GOFLAGS: -mod=mod
+
+jobs:
+  quality:
+    name: Format, vet, and unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Go
+        uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Verify formatting
+        shell: bash
+        run: |
+          unformatted="$(git ls-files -z '*.go' ':!:vendor/**' ':!:Godeps/**' | xargs -0 gofmt -l)"
+          if [[ -n "$unformatted" ]]; then
+            echo "The following files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Run unit and handler tests
+        run: go test ./...
+
+  postgres-integration:
+    name: PostgreSQL 19 integration tests
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:19.0-bookworm@sha256:f8b826440669ad283328d2ac8326682539eddd91867904ad5abf4ec19269d241
+        env:
+          POSTGRES_USER: mealbot_test
+          POSTGRES_PASSWORD: ci-test-password
+          POSTGRES_DB: mealbot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mealbot_test -d mealbot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      MEALBOT_RUN_POSTGRES_INTEGRATION: "1"
+      MEALBOT_TEST_DATABASE_URL: postgres://mealbot_test:ci-test-password@localhost:5432/mealbot_test?sslmode=disable
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Go
+        uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Run isolated PostgreSQL integration suite
+        run: go test ./...
+
+  race:
+    name: Race detector
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Go
+        uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Run race-enabled test suite
+        run: go test -race ./...
+
+  vulnerability:
+    name: Vulnerability scan
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Go
+        uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Install pinned govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+      - name: Scan all packages
+        run: govulncheck ./...
+
+  reproducible-delivery:
+    name: Clean-cache build and command smoke tests
+    needs:
+      - postgres-integration
+      - race
+      - vulnerability
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:19.0-bookworm@sha256:f8b826440669ad283328d2ac8326682539eddd91867904ad5abf4ec19269d241
+        env:
+          POSTGRES_USER: mealbot_test
+          POSTGRES_PASSWORD: ci-test-password
+          POSTGRES_DB: mealbot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mealbot_test -d mealbot_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://mealbot_test:ci-test-password@localhost:5432/mealbot_test?sslmode=disable
+      AUTH0_ISSUER: https://ci.invalid/
+      AUTH0_AUDIENCE: https://mealbot-ci.invalid/
+      AUTH0_JWKS_URL: https://ci.invalid/.well-known/jwks.json
+      MEALBOT_TEST_MODE: "true"
+      GOMODCACHE: ${{ runner.temp }}/mealbot-empty-modcache
+      GOCACHE: ${{ runner.temp }}/mealbot-empty-buildcache
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Go without dependency caching
+        uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Prove clean module-cache resolution
+        shell: bash
+        run: |
+          mkdir -p "$GOMODCACHE" "$GOCACHE"
+          if find "$GOMODCACHE" -mindepth 1 -print -quit | grep -q .; then
+            echo "GOMODCACHE was not empty before dependency resolution"
+            exit 1
+          fi
+          go mod download
+          go mod verify
+      - name: Build the shared deployable binary
+        run: go build -trimpath -o "${RUNNER_TEMP}/mealbot" ./cmd/mealbot
+      - name: Verify command dispatch without external work
+        shell: bash
+        run: |
+          output="$("${RUNNER_TEMP}/mealbot" unknown)"
+          test "$output" = "argument 'unknown' not recognized"
+      - name: Exercise migrate and pair modes
+        shell: bash
+        run: |
+          "${RUNNER_TEMP}/mealbot" migrate
+          "${RUNNER_TEMP}/mealbot" pair
+      - name: Start web mode and verify static healthcheck
+        shell: bash
+        env:
+          PORT: "18080"
+        run: |
+          "${RUNNER_TEMP}/mealbot" >"${RUNNER_TEMP}/mealbot.log" 2>&1 &
+          mealbot_pid=$!
+          trap 'kill "$mealbot_pid" 2>/dev/null || true' EXIT
+
+          ready=false
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:18080/privacy.html >"${RUNNER_TEMP}/privacy.html"; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            cat "${RUNNER_TEMP}/mealbot.log"
+            exit 1
+          fi
+
+          cmp "${RUNNER_TEMP}/privacy.html" static/privacy.html
+          curl --fail --silent --show-error http://127.0.0.1:18080/sample.csv >"${RUNNER_TEMP}/sample.csv"
+          cmp "${RUNNER_TEMP}/sample.csv" static/sample.csv
+          kill "$mealbot_pid"
+          wait "$mealbot_pid" || true
+          trap - EXIT
