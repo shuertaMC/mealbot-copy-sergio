@@ -1,14 +1,12 @@
 // Package db provides the PostgreSQL connection helpers, the JSONB column type,
-// duplicate-key detection and the small Querier interface that the rest of the
+// the duplicate-key error text and the small Querier interface that the rest of the
 // code depends on (so it can be mocked with go-sqlmock).
 package db
 
 import (
 	"database/sql"
-	"errors"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/johnamadeo/mealbot/internal/config"
@@ -17,8 +15,6 @@ import (
 const (
 	// DriverName is the database/sql driver name registered by pgx's stdlib package.
 	DriverName = "pgx"
-	// DuplicateKeyCode is the PostgreSQL SQLSTATE for unique_violation.
-	DuplicateKeyCode = "23505"
 	// DuplicateKeyErr : Error message when user tries to insert row with duplicate key
 	DuplicateKeyErr = "duplicate key value violates unique constraint"
 )
@@ -31,15 +27,6 @@ type Querier interface {
 }
 
 var _ Querier = (*sql.DB)(nil)
-
-// IsDuplicateKey reports whether err is a PostgreSQL unique-constraint violation.
-func IsDuplicateKey(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == DuplicateKeyCode
-	}
-	return false
-}
 
 // Open creates a *sql.DB for the configured database. Like sql.Open it does not
 // establish a connection until first use.

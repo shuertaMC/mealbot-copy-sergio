@@ -18,10 +18,3 @@ func (mw *Middleware) Apply(
 
 	return handler
 }
-
-// ApplyFake : wraps the core handler without applying any middleware; for testing
-func (mw Middleware) ApplyFake(
-	coreHandler func(w http.ResponseWriter, r *http.Request),
-) http.Handler {
-	return http.Handler(http.HandlerFunc(coreHandler))
-}
