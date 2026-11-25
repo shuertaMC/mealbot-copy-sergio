@@ -260,15 +260,38 @@ func TestMembersHandlerPostContracts(t *testing.T) {
 
 func TestMembersHandlerPostQueryValidation(t *testing.T) {
 	t.Parallel()
-	for _, target := range []string{"/members", "/members?org=", "/members?org=a&org=b"} {
-		response := httptest.NewRecorder()
-		NewMembersHandler(&fakeMemberUseCases{}, 1024, testLogger()).ServeHTTP(
-			response,
-			httptest.NewRequest(http.MethodPost, target, strings.NewReader("not multipart")),
-		)
-		if response.Code != http.StatusBadRequest || response.Body.String() != "{\"error\":\"invalid request\"}\n" {
-			t.Fatalf("target %q: status=%d body=%q", target, response.Code, response.Body.String())
-		}
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{name: "missing org", target: "/members"},
+		{name: "repeated org", target: "/members?org=a&org=b"},
+		{name: "empty org", target: "/members?org="},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			part, err := writer.CreateFormFile("members", "members.csv")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = part.Write([]byte("name,email\nAmy,a@example.com\n"))
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			service := &fakeMemberUseCases{}
+			request := httptest.NewRequest(http.MethodPost, test.target, &body)
+			request.Header.Set("Content-Type", writer.FormDataContentType())
+			response := httptest.NewRecorder()
+			NewMembersHandler(service, 1024, testLogger()).ServeHTTP(response, request)
+			assertHTTPResponse(t, response, http.StatusBadRequest, "{\"error\":\"invalid request\"}\n", "application/json; charset=utf-8")
+			if service.organization != "" || service.imported != "" {
+				t.Fatalf("query failure invoked import with organization %q and data %q", service.organization, service.imported)
+			}
+		})
 	}
 }
 

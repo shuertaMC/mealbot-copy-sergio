@@ -186,19 +186,20 @@ func TestCrossMatchTraitHandlerSetClearAndErrors(t *testing.T) {
 		err    error
 		status int
 		set    *string
+		want   string
 	}{
-		{name: "set", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":" college "}`, status: 201, set: stringPointer("college")},
-		{name: "clear", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":null}`, status: 201},
-		{name: "not found", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":"college"}`, err: domain.NewNotFoundError("org", "alpha"), status: 404},
-		{name: "method", method: http.MethodGet, url: "/crossmatchtrait?org=alpha", status: 405},
-		{name: "missing query", method: http.MethodPost, url: "/crossmatchtrait", body: `{"trait":"college"}`, status: 400},
-		{name: "repeated query", method: http.MethodPost, url: "/crossmatchtrait?org=a&org=b", body: `{"trait":"college"}`, status: 400},
-		{name: "empty query", method: http.MethodPost, url: "/crossmatchtrait?org=", body: `{"trait":"college"}`, status: 400},
-		{name: "missing trait", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{}`, status: 400},
-		{name: "empty trait", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":" "}`, status: 400},
-		{name: "wrong trait type", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":4}`, status: 400},
-		{name: "unknown field", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":"x","other":1}`, status: 400},
-		{name: "internal", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":"x"}`, err: errors.New("sql details"), status: 500},
+		{name: "set", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":" college "}`, status: 201, set: stringPointer("college"), want: traitUpdatedText},
+		{name: "clear", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":null}`, status: 201, want: traitUpdatedText},
+		{name: "not found", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":"college"}`, err: domain.NewNotFoundError("org", "alpha"), status: 404, want: "{\"error\":\"not found\"}\n"},
+		{name: "method", method: http.MethodGet, url: "/crossmatchtrait?org=alpha", status: 405, want: "{\"error\":\"method not allowed\"}\n"},
+		{name: "missing query", method: http.MethodPost, url: "/crossmatchtrait", body: `{"trait":"college"}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
+		{name: "repeated query", method: http.MethodPost, url: "/crossmatchtrait?org=a&org=b", body: `{"trait":"college"}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
+		{name: "empty query", method: http.MethodPost, url: "/crossmatchtrait?org=", body: `{"trait":"college"}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
+		{name: "missing trait", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
+		{name: "empty trait", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":" "}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
+		{name: "wrong trait type", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":4}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
+		{name: "unknown field", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":"x","other":1}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
+		{name: "internal", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":"x"}`, err: errors.New("sql details"), status: 500, want: "{\"error\":\"internal server error\"}\n"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -206,14 +207,13 @@ func TestCrossMatchTraitHandlerSetClearAndErrors(t *testing.T) {
 			service := &fakeOrganizationUseCases{err: test.err}
 			response := httptest.NewRecorder()
 			NewCrossMatchTraitHandler(service, 1024, testLogger()).ServeHTTP(response, httptest.NewRequest(test.method, test.url, bytes.NewBufferString(test.body)))
-			if response.Code != test.status {
-				t.Fatalf("status = %d, body = %q", response.Code, response.Body.String())
-			}
-			if response.Header().Get("Content-Type") == "" {
-				t.Fatal("missing content type")
-			}
+			contentType := "application/json; charset=utf-8"
 			if test.status == 201 {
-				if response.Body.String() != traitUpdatedText || service.updatedOrg != "alpha" || !equalStringPointers(service.trait, test.set) {
+				contentType = "text/plain; charset=utf-8"
+			}
+			assertHTTPResponse(t, response, test.status, test.want, contentType)
+			if test.status == 201 {
+				if service.updatedOrg != "alpha" || !equalStringPointers(service.trait, test.set) {
 					t.Fatalf("body=%q org=%q trait=%v", response.Body.String(), service.updatedOrg, service.trait)
 				}
 			}
