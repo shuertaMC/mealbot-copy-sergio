@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	_ "embed"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/johnamadeo/mealbot/internal/domain"
@@ -23,13 +25,8 @@ func TestPostgresRepositoryIntegration(t *testing.T) {
 		t.Skip("set RUN_POSTGRES_INTEGRATION=1 with a disposable DATABASE_URL")
 	}
 	databaseURL := os.Getenv("DATABASE_URL")
-	parsed, err := url.Parse(databaseURL)
-	if err != nil || databaseURL == "" {
-		t.Fatal("DATABASE_URL must be a valid disposable PostgreSQL URL")
-	}
-	databaseName := strings.TrimPrefix(parsed.Path, "/")
-	if !strings.Contains(strings.ToLower(databaseName), "test") {
-		t.Fatalf("refusing destructive integration test against database %q: name must contain test", databaseName)
+	if _, err := validatedTestDatabaseName(databaseURL); err != nil {
+		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -243,9 +240,8 @@ func TestLegacyPairCountsMigration(t *testing.T) {
 		t.Skip("set RUN_POSTGRES_INTEGRATION=1 with a disposable DATABASE_URL")
 	}
 	databaseURL := os.Getenv("DATABASE_URL")
-	parsed, _ := url.Parse(databaseURL)
-	if !strings.Contains(strings.ToLower(strings.TrimPrefix(parsed.Path, "/")), "test") {
-		t.Skip("disposable database name must contain test")
+	if _, err := validatedTestDatabaseName(databaseURL); err != nil {
+		t.Fatal(err)
 	}
 	ctx := context.Background()
 	db, err := sql.Open(driverName, databaseURL)
@@ -359,4 +355,109 @@ func TestIntegrationErrorClassificationContract(t *testing.T) {
 	if !errors.Is(domain.NewIntegrityError("test", "test", nil), domain.ErrIntegrity) {
 		t.Fatal("domain integrity error contract changed")
 	}
+}
+
+func TestValidatedTestDatabaseName(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "exact", raw: "postgresql://tester@localhost/test", want: "test"},
+		{name: "prefix segment", raw: "postgresql://tester@localhost/test_mealbot", want: "test_mealbot"},
+		{name: "middle segment", raw: "postgresql://tester@localhost/mealbot_test_123", want: "mealbot_test_123"},
+		{name: "hyphen segment", raw: "postgresql://tester@localhost/mealbot-test", want: "mealbot-test"},
+		{name: "socket query", raw: "postgresql:///mealbot_test?host=%2Fvar%2Frun%2Fpostgresql", want: "mealbot_test"},
+		{name: "case insensitive", raw: "postgres://tester@localhost/MealBot_TEST?sslmode=disable", want: "MealBot_TEST"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := validatedTestDatabaseName(test.raw)
+			if err != nil || got != test.want {
+				t.Fatalf("validatedTestDatabaseName(%q) = %q, %v, want %q", test.raw, got, err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidatedTestDatabaseNameRejectsUnsafeURLs(t *testing.T) {
+	t.Parallel()
+	tests := []string{
+		"",
+		"localhost/mealbot_test",
+		"mysql://tester@localhost/mealbot_test",
+		"postgresql://tester@localhost/postgres",
+		"postgresql://tester@localhost/latest",
+		"postgresql://tester@localhost/contest",
+		"postgresql://tester@localhost/testimonials",
+		"postgresql://tester@localhost/mealbot_testimonials",
+		"postgresql://tester@localhost/mealbot_test123",
+		"postgresql://tester@localhost/mealbottest",
+		"postgresql://tester@localhost/mealbot_test?dbname=production",
+		"postgresql://tester@localhost/mealbot_test%ZZ",
+	}
+	for _, raw := range tests {
+		t.Run(raw, func(t *testing.T) {
+			if got, err := validatedTestDatabaseName(raw); err == nil {
+				t.Fatalf("validatedTestDatabaseName(%q) = %q, want error", raw, got)
+			}
+		})
+	}
+}
+
+func validatedTestDatabaseName(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", fmt.Errorf("DATABASE_URL must be a non-empty PostgreSQL URL")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("DATABASE_URL must be a valid PostgreSQL URL: %w", err)
+	}
+	if !strings.EqualFold(parsed.Scheme, "postgres") && !strings.EqualFold(parsed.Scheme, "postgresql") {
+		return "", fmt.Errorf("DATABASE_URL must use the postgres or postgresql scheme")
+	}
+	if parsed.Opaque != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("DATABASE_URL must be an absolute PostgreSQL URL without a fragment")
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return "", fmt.Errorf("DATABASE_URL has an invalid query: %w", err)
+	}
+	for key := range query {
+		if strings.EqualFold(key, "dbname") {
+			return "", fmt.Errorf("DATABASE_URL must select its database in the URL path, not a dbname query parameter")
+		}
+	}
+	if !strings.HasPrefix(parsed.Path, "/") || len(parsed.Path) == 1 {
+		return "", fmt.Errorf("DATABASE_URL must select a database in its URL path")
+	}
+	databaseName := strings.TrimPrefix(parsed.Path, "/")
+	if databaseName == "" || strings.ContainsRune(databaseName, '\x00') {
+		return "", fmt.Errorf("DATABASE_URL must select a valid database name")
+	}
+	if !hasDelimitedTestSegment(databaseName) {
+		return "", fmt.Errorf(
+			"refusing destructive integration test against database %q: name must contain test as a delimited segment",
+			databaseName,
+		)
+	}
+	return databaseName, nil
+}
+
+func hasDelimitedTestSegment(databaseName string) bool {
+	segmentStart := -1
+	for index, character := range databaseName {
+		if unicode.IsLetter(character) || unicode.IsNumber(character) {
+			if segmentStart == -1 {
+				segmentStart = index
+			}
+			continue
+		}
+		if segmentStart != -1 && strings.EqualFold(databaseName[segmentStart:index], "test") {
+			return true
+		}
+		segmentStart = -1
+	}
+	return segmentStart != -1 && strings.EqualFold(databaseName[segmentStart:], "test")
 }

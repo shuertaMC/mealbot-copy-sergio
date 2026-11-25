@@ -67,20 +67,30 @@ def _database_name(database_url: str) -> str:
 
 def _validated_test_database_name(database_url: str) -> str:
     database_name = _database_name(database_url)
-    if "test" not in database_name.casefold():
+    segments: list[str] = []
+    segment: list[str] = []
+    for character in database_name:
+        if character.isalnum():
+            segment.append(character)
+        elif segment:
+            segments.append("".join(segment))
+            segment = []
+    if segment:
+        segments.append("".join(segment))
+    if not any(value.casefold() == "test" for value in segments):
         raise ValueError(
             f"refusing destructive functional test against database {database_name!r}: "
-            "name must contain test"
+            "name must contain test as a delimited segment"
         )
     return database_name
 
 
 def _database_url_with_name(database_url: str, database_name: str) -> str:
     _database_name(database_url)
-    if "test" not in database_name.casefold() or "\x00" in database_name:
-        raise ValueError("replacement database name must be a disposable name containing test")
     parsed = urlsplit(database_url)
-    return urlunsplit(parsed._replace(path="/" + quote(database_name, safe="")))
+    rewritten = urlunsplit(parsed._replace(path="/" + quote(database_name, safe="")))
+    _validated_test_database_name(rewritten)
+    return rewritten
 
 
 def _legacy_database_name(base_database_name: str) -> str:
@@ -338,7 +348,11 @@ def without_runtime() -> None:
 @pytest.mark.parametrize(
     ("database_url", "expected_name"),
     [
+        ("postgresql://tester@localhost/test", "test"),
+        ("postgresql://tester@localhost/test_mealbot", "test_mealbot"),
         ("postgresql://tester:secret@db.example/mealbot_test", "mealbot_test"),
+        ("postgresql://tester@localhost/mealbot_test_123", "mealbot_test_123"),
+        ("postgresql://tester@localhost/mealbot-test", "mealbot-test"),
         ("postgres://tester@localhost/MealBot_TEST?sslmode=disable", "MealBot_TEST"),
         (
             "postgresql:///mealbot_test?host=%2Fvar%2Frun%2Fpostgresql",
@@ -366,6 +380,12 @@ def test_database_url_validation_accepts_disposable_variants(
         "mysql://tester@localhost/mealbot_test",
         "postgresql://tester@localhost/postgres",
         "postgresql://tester@localhost/mealbot",
+        "postgresql://tester@localhost/latest",
+        "postgresql://tester@localhost/contest",
+        "postgresql://tester@localhost/testimonials",
+        "postgresql://tester@localhost/mealbot_testimonials",
+        "postgresql://tester@localhost/mealbot_test123",
+        "postgresql://tester@localhost/mealbottest",
         "postgresql://tester@localhost/mealbot_test?dbname=production",
         "postgresql://tester@localhost/mealbot_test%ZZ",
     ],
@@ -393,6 +413,27 @@ def test_database_url_validation_preserves_connection_settings_when_rewriting(
         _database_url_with_name(admin_url, "production")
 
 
+def test_generated_legacy_database_name_remains_disposable(without_runtime: None) -> None:
+    generated = _legacy_database_name("contest")
+    assert len(generated.encode()) <= 63
+    rewritten = _database_url_with_name("postgresql:///postgres?host=/var/run/postgresql", generated)
+    assert _validated_test_database_name(rewritten) == generated
+
+
+def test_schema_bootstrap_is_fail_fast_and_transactional(without_runtime: None) -> None:
+    schema = (REPO / "schema.sql").read_text(encoding="utf-8")
+    markers = [
+        "\\set ON_ERROR_STOP on",
+        "BEGIN;",
+        "\\ir migrations/001_initial_schema.sql",
+        "\\ir migrations/002_reconcile_legacy_schema.sql",
+        "\\ir migrations/003_constraints_and_indexes.sql",
+        "COMMIT;",
+    ]
+    positions = [schema.index(marker) for marker in markers]
+    assert positions == sorted(positions)
+
+
 @pytest.fixture(scope="session")
 def runtime() -> Runtime:
     _validated_test_database_name(DATABASE_URL)
@@ -400,6 +441,18 @@ def runtime() -> Runtime:
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
     for old in EVIDENCE_DIR.glob("*.json"):
         old.unlink()
+
+    reset = _run(["psql", DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-f", str(REPO / "internal/store/postgres/testdata/reset.sql")])
+    assert reset.returncode == 0, reset.stderr
+
+    bootstrap = _run(["psql", DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-f", "schema.sql"])
+    assert bootstrap.returncode == 0, bootstrap.stderr
+    bootstrapped = _psql(
+        "SELECT to_regclass('organizations'), to_regclass('members'), "
+        "to_regclass('rounds'), to_regclass('pairs'), "
+        "EXISTS (SELECT 1 FROM pg_constraint WHERE conname='pairs_canonical_order_check');"
+    ).strip()
+    assert bootstrapped == "organizations|members|rounds|pairs|t"
 
     reset = _run(["psql", DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-f", str(REPO / "internal/store/postgres/testdata/reset.sql")])
     assert reset.returncode == 0, reset.stderr
@@ -995,6 +1048,7 @@ class TestCLI:
         database = _legacy_database_name(base_database)
         legacy_url = _database_url_with_name(DATABASE_URL, database)
         admin_legacy_url = _database_url_with_name(admin_url, database)
+        assert _validated_test_database_name(admin_legacy_url) == database
         owner = _psql("SELECT current_user;").strip()
         _admin_psql(f"CREATE DATABASE {_quote_identifier(database)};", admin_url)
         try:
@@ -1055,4 +1109,5 @@ class TestCLI:
             ).strip()
             assert symmetric == "0|0"
         finally:
+            assert _validated_test_database_name(admin_legacy_url) == database
             _admin_psql(f"DROP DATABASE IF EXISTS {_quote_identifier(database)};", admin_url)

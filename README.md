@@ -46,7 +46,7 @@ export STATIC_DIR=static
 
 Do not set `DATABASE_URL` together with `DB_USER` or `DB_NAME`. Local `DB_USER`/`DB_NAME` connections use the platform PostgreSQL defaults; use `DATABASE_URL` when host, port, password, TLS, or other connection options are needed.
 
-The service applies embedded forward migrations at startup. For a `psql`-based local bootstrap, `schema.sql` includes the same three ordered migration files and is non-destructive:
+The service applies embedded forward migrations at startup. For a `psql`-based local bootstrap, `schema.sql` includes the same three ordered migration files in one fail-fast transaction and is non-destructive:
 
 ```sh
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema.sql
