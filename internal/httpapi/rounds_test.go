@@ -91,7 +91,23 @@ func TestRoundHandlersGetCompatibility(t *testing.T) {
 	}
 }
 
-func TestRoundHandlersGetFailures(t *testing.T) {
+func TestRoundsEndpointMethodRestriction(t *testing.T) {
+	handler := http.HandlerFunc(NewRoundHandlers(&fakeRoundStore{}, NewResponder(nil)).Get)
+	assertRoundHTTP(t, handler, http.MethodPost, "/rounds?org=alpha", http.StatusMethodNotAllowed, `{"Message":"Only GET requests are allowed at this route"}`, "")
+}
+
+func TestRoundsEndpointRepositoryFailure(t *testing.T) {
+	t.Run("store error", func(t *testing.T) {
+		handler := http.HandlerFunc(NewRoundHandlers(&fakeRoundStore{listErr: errors.New("round failure")}, NewResponder(nil)).Get)
+		assertRoundHTTP(t, handler, http.MethodGet, "/rounds?org=alpha", http.StatusInternalServerError, `{"Message":"round failure"}`, "")
+	})
+	t.Run("missing store", func(t *testing.T) {
+		handler := http.HandlerFunc(NewRoundHandlers(nil, NewResponder(nil)).Get)
+		assertRoundHTTP(t, handler, http.MethodGet, "/rounds?org=alpha", http.StatusInternalServerError, `{"Message":"round store is unavailable"}`, "")
+	})
+}
+
+func TestRoundHandlersGetQueryFailures(t *testing.T) {
 	tests := []struct {
 		name   string
 		method string
@@ -100,11 +116,8 @@ func TestRoundHandlersGetFailures(t *testing.T) {
 		status int
 		body   string
 	}{
-		{"wrong method", http.MethodPost, "/rounds?org=alpha", &fakeRoundStore{}, http.StatusMethodNotAllowed, `{"Message":"Only GET requests are allowed at this route"}`},
 		{"missing organization", http.MethodGet, "/rounds", &fakeRoundStore{}, http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`},
 		{"duplicate organization", http.MethodGet, "/rounds?org=one&org=two", &fakeRoundStore{}, http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`},
-		{"store failure", http.MethodGet, "/rounds?org=alpha", &fakeRoundStore{listErr: errors.New("round failure")}, http.StatusInternalServerError, `{"Message":"round failure"}`},
-		{"nil store", http.MethodGet, "/rounds?org=alpha", nil, http.StatusInternalServerError, `{"Message":"round store is unavailable"}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -150,16 +163,33 @@ func TestRoundHandlersDispatcherCompatibility(t *testing.T) {
 			t.Fatalf("delete calls=%d values=%q/%d", store.deleteCalls, store.deletedOrg, store.deletedID)
 		}
 	})
+}
 
+func TestRoundEndpointMethodRestrictions(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodPatch} {
-		t.Run("method "+method, func(t *testing.T) {
+		t.Run(method, func(t *testing.T) {
 			handler := NewRoundHandlers(&fakeRoundStore{}, NewResponder(nil))
 			assertRoundHTTP(t, handler, method, "/round?org=alpha", http.StatusMethodNotAllowed, `{"Message":"Only POST and DELETE requests are allowed at this route"}`, "")
 		})
 	}
 }
 
-func TestRoundHandlersMutationFailures(t *testing.T) {
+func TestRoundEndpointRepositoryFailures(t *testing.T) {
+	t.Run("POST add", func(t *testing.T) {
+		handler := NewRoundHandlers(&fakeRoundStore{addErr: errors.New("add failure")}, NewResponder(nil))
+		assertRoundHTTP(t, handler, http.MethodPost, "/round?org=alpha&round=now", http.StatusBadRequest, `{"Message":"add failure"}`, "")
+	})
+	t.Run("POST reschedule", func(t *testing.T) {
+		handler := NewRoundHandlers(&fakeRoundStore{rescheduleErr: errors.New("reschedule failure")}, NewResponder(nil))
+		assertRoundHTTP(t, handler, http.MethodPost, "/round?org=alpha&round=now&roundId=1", http.StatusInternalServerError, `{"Message":"reschedule failure"}`, "")
+	})
+	t.Run("DELETE", func(t *testing.T) {
+		handler := NewRoundHandlers(&fakeRoundStore{deleteErr: errors.New("delete failure")}, NewResponder(nil))
+		assertRoundHTTP(t, handler, http.MethodDelete, "/round?org=alpha&roundId=1", http.StatusInternalServerError, `{"Message":"delete failure"}`, "")
+	})
+}
+
+func TestRoundHandlersMutationInputFailures(t *testing.T) {
 	tests := []struct {
 		name   string
 		method string
@@ -172,18 +202,15 @@ func TestRoundHandlersMutationFailures(t *testing.T) {
 		{"add duplicate org", http.MethodPost, "/round?org=one&org=two&round=now", &fakeRoundStore{}, http.StatusBadRequest, `{"Message":"Request query parameters does not contain org"}`},
 		{"add missing round", http.MethodPost, "/round?org=alpha", &fakeRoundStore{}, http.StatusBadRequest, `{"Message":"Request query parameters does not contain round"}`},
 		{"add duplicate round", http.MethodPost, "/round?org=alpha&round=one&round=two", &fakeRoundStore{}, http.StatusBadRequest, `{"Message":"Request query parameters does not contain round"}`},
-		{"add store failure is bad request", http.MethodPost, "/round?org=alpha&round=now", &fakeRoundStore{addErr: errors.New("add failure")}, http.StatusBadRequest, `{"Message":"add failure"}`},
 		{"reschedule empty id", http.MethodPost, "/round?org=alpha&round=now&roundId=", &fakeRoundStore{}, http.StatusInternalServerError, `{"Message":"strconv.Atoi: parsing \"\": invalid syntax"}`},
 		{"reschedule invalid id", http.MethodPost, "/round?org=alpha&round=now&roundId=nope", &fakeRoundStore{}, http.StatusInternalServerError, `{"Message":"strconv.Atoi: parsing \"nope\": invalid syntax"}`},
 		{"reschedule missing round", http.MethodPost, "/round?org=alpha&roundId=1", &fakeRoundStore{}, http.StatusBadRequest, `{"Message":"Request query parameters does not contain round"}`},
 		{"reschedule duplicate round", http.MethodPost, "/round?org=alpha&round=one&round=two&roundId=1", &fakeRoundStore{}, http.StatusBadRequest, `{"Message":"Request query parameters does not contain round"}`},
-		{"reschedule store failure", http.MethodPost, "/round?org=alpha&round=now&roundId=1", &fakeRoundStore{rescheduleErr: errors.New("reschedule failure")}, http.StatusInternalServerError, `{"Message":"reschedule failure"}`},
 		{"remove missing id", http.MethodDelete, "/round?org=alpha", &fakeRoundStore{}, http.StatusBadRequest, `{"Message":"Request query parameters does not contain roundId"}`},
 		{"remove duplicate org", http.MethodDelete, "/round?org=one&org=two&roundId=1", &fakeRoundStore{}, http.StatusBadRequest, `{"Message":"Request query parameters does not contain org"}`},
 		{"remove duplicate id", http.MethodDelete, "/round?org=alpha&roundId=1&roundId=2", &fakeRoundStore{}, http.StatusBadRequest, `{"Message":"Request query parameters does not contain roundId"}`},
 		{"remove empty id", http.MethodDelete, "/round?org=alpha&roundId=", &fakeRoundStore{}, http.StatusInternalServerError, `{"Message":"strconv.Atoi: parsing \"\": invalid syntax"}`},
 		{"remove invalid id", http.MethodDelete, "/round?org=alpha&roundId=nope", &fakeRoundStore{}, http.StatusInternalServerError, `{"Message":"strconv.Atoi: parsing \"nope\": invalid syntax"}`},
-		{"remove store failure", http.MethodDelete, "/round?org=alpha&roundId=1", &fakeRoundStore{deleteErr: errors.New("delete failure")}, http.StatusInternalServerError, `{"Message":"delete failure"}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -113,7 +113,23 @@ func TestPairHandlersNilAndEmptyHistories(t *testing.T) {
 	}
 }
 
-func TestPairHandlersFailures(t *testing.T) {
+func TestPairsEndpointMethodRestriction(t *testing.T) {
+	handlers := NewPairHandlers(&fakePairStore{}, NewResponder(nil))
+	assertPairHTTP(t, http.HandlerFunc(handlers.Get), http.MethodPost, "/pairs?org=alpha", http.StatusMethodNotAllowed, `{"Message":"Only GET requests are allowed at this route"}`, "")
+}
+
+func TestPairsEndpointRepositoryFailure(t *testing.T) {
+	t.Run("store error", func(t *testing.T) {
+		handlers := NewPairHandlers(&fakePairStore{err: errors.New("pair failure")}, NewResponder(nil))
+		assertPairHTTP(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=alpha", http.StatusInternalServerError, `{"Message":"pair failure"}`, "")
+	})
+	t.Run("missing store", func(t *testing.T) {
+		handlers := NewPairHandlers(nil, NewResponder(nil))
+		assertPairHTTP(t, http.HandlerFunc(handlers.Get), http.MethodGet, "/pairs?org=alpha", http.StatusInternalServerError, `{"Message":"pair store is unavailable"}`, "")
+	})
+}
+
+func TestPairHandlersQueryFailures(t *testing.T) {
 	tests := []struct {
 		name   string
 		method string
@@ -122,11 +138,8 @@ func TestPairHandlersFailures(t *testing.T) {
 		status int
 		body   string
 	}{
-		{"wrong method", http.MethodPost, "/pairs?org=alpha", &fakePairStore{}, http.StatusMethodNotAllowed, `{"Message":"Only GET requests are allowed at this route"}`},
 		{"missing organization", http.MethodGet, "/pairs", &fakePairStore{}, http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`},
 		{"duplicate organization", http.MethodGet, "/pairs?org=one&org=two", &fakePairStore{}, http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`},
-		{"store failure", http.MethodGet, "/pairs?org=alpha", &fakePairStore{err: errors.New("pair failure")}, http.StatusInternalServerError, `{"Message":"pair failure"}`},
-		{"nil store", http.MethodGet, "/pairs?org=alpha", nil, http.StatusInternalServerError, `{"Message":"pair store is unavailable"}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

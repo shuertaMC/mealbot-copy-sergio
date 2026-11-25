@@ -96,28 +96,53 @@ func TestMemberGetSuccessEmptyAndOptionalTrait(t *testing.T) {
 	assertHandlerResponse(t, handlers.Get, http.MethodGet, "/members?org=empty", "", http.StatusOK, `{"members":[],"traits":[],"crossMatchTrait":""}`)
 }
 
-func TestMemberGetFailuresAndMethodContracts(t *testing.T) {
+func TestMembersEndpointMethodRestrictions(t *testing.T) {
 	members := &fakeMemberStore{}
 	traits := &fakeTraitReader{}
 	handlers := NewMemberHandlers(members, traits, NewResponder(nil))
-	assertHandlerResponse(t, handlers.Get, http.MethodPost, "/members?org=alpha", "", http.StatusMethodNotAllowed, `{"Message":"Only GET requests are allowed at this route"}`)
-	assertHandlerResponse(t, handlers.Get, http.MethodGet, "/members", "", http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`)
-	assertHandlerResponse(t, handlers.Get, http.MethodGet, "/members?org=a&org=b", "", http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`)
 
-	members.listErr = errors.New("database unavailable")
-	assertHandlerResponse(t, handlers.Get, http.MethodGet, "/members?org=alpha", "", http.StatusInternalServerError, `{"Message":"database unavailable"}`)
-	members.listErr = nil
-	traits.err = errors.New("trait unavailable")
-	assertHandlerResponse(t, handlers.Get, http.MethodGet, "/members?org=alpha", "", http.StatusInternalServerError, `{"Message":"trait unavailable"}`)
-
-	recorder := httptest.NewRecorder()
-	handlers.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/members?org=alpha", nil))
-	if recorder.Code != http.StatusOK || recorder.Body.Len() != 0 {
-		t.Fatalf("unsupported dispatcher response = (%d, %q)", recorder.Code, recorder.Body.String())
-	}
+	t.Run("GET operation rejects POST", func(t *testing.T) {
+		assertHandlerResponse(t, handlers.Get, http.MethodPost, "/members?org=alpha", "", http.StatusMethodNotAllowed, `{"Message":"Only GET requests are allowed at this route"}`)
+	})
+	t.Run("POST operation rejects GET", func(t *testing.T) {
+		assertHandlerResponse(t, handlers.Create, http.MethodGet, "/members?org=alpha", "", http.StatusMethodNotAllowed, `{"Message":"Only POST requests are allowed at this route"}`)
+	})
+	t.Run("dispatcher silently ignores unsupported methods", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		handlers.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/members?org=alpha", nil))
+		if recorder.Code != http.StatusOK || recorder.Body.Len() != 0 {
+			t.Fatalf("unsupported dispatcher response = (%d, %q)", recorder.Code, recorder.Body.String())
+		}
+	})
 }
 
-func TestMemberCreateSuccessAndStoreFailure(t *testing.T) {
+func TestMembersEndpointRepositoryFailures(t *testing.T) {
+	t.Run("GET member list failure", func(t *testing.T) {
+		handlers := NewMemberHandlers(&fakeMemberStore{listErr: errors.New("database unavailable")}, &fakeTraitReader{}, NewResponder(nil))
+		assertHandlerResponse(t, handlers.Get, http.MethodGet, "/members?org=alpha", "", http.StatusInternalServerError, `{"Message":"database unavailable"}`)
+	})
+	t.Run("GET cross-match trait failure", func(t *testing.T) {
+		handlers := NewMemberHandlers(&fakeMemberStore{}, &fakeTraitReader{err: errors.New("trait unavailable")}, NewResponder(nil))
+		assertHandlerResponse(t, handlers.Get, http.MethodGet, "/members?org=alpha", "", http.StatusInternalServerError, `{"Message":"trait unavailable"}`)
+	})
+	t.Run("POST member synchronization failure", func(t *testing.T) {
+		members := &fakeMemberStore{syncErr: errors.New("database unavailable")}
+		handlers := NewMemberHandlers(members, &fakeTraitReader{}, NewResponder(nil))
+		recorder := httptest.NewRecorder()
+		handlers.Create(recorder, multipartRequest(t, "/members?org=alpha", "members", "people.csv", "Name,Email\nAlice,alice@example.com\n"))
+		if recorder.Code != http.StatusInternalServerError || recorder.Body.String() != `{"Message":"database unavailable"}` {
+			t.Fatalf("store error response = (%d, %q)", recorder.Code, recorder.Body.String())
+		}
+	})
+}
+
+func TestMemberGetQueryFailures(t *testing.T) {
+	handlers := NewMemberHandlers(&fakeMemberStore{}, &fakeTraitReader{}, NewResponder(nil))
+	assertHandlerResponse(t, handlers.Get, http.MethodGet, "/members", "", http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`)
+	assertHandlerResponse(t, handlers.Get, http.MethodGet, "/members?org=a&org=b", "", http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`)
+}
+
+func TestMemberCreateSuccess(t *testing.T) {
 	csv := "Name,Email,Year,Cohort\n Alice , alice@example.com ,2024,blue\n"
 	members := &fakeMemberStore{plan: store.MemberSyncPlan{Members: []store.MemberInput{{
 		Name: "Alice", Email: "alice@example.com", Metadata: map[string]string{"year": "2024", "cohort": "blue"},
@@ -132,19 +157,11 @@ func TestMemberCreateSuccessAndStoreFailure(t *testing.T) {
 	if members.syncCalls != 1 || members.source != csv {
 		t.Fatalf("sync = (%d, %q)", members.syncCalls, members.source)
 	}
-
-	members.syncErr = errors.New("database unavailable")
-	recorder = httptest.NewRecorder()
-	handlers.Create(recorder, multipartRequest(t, "/members?org=alpha", "members", "people.csv", csv))
-	if recorder.Code != http.StatusInternalServerError || recorder.Body.String() != `{"Message":"database unavailable"}` {
-		t.Fatalf("store error response = (%d, %q)", recorder.Code, recorder.Body.String())
-	}
 }
 
 func TestMemberCreateRejectsMalformedRequestsBeforeStoreMutation(t *testing.T) {
 	members := &fakeMemberStore{}
 	handlers := NewMemberHandlers(members, &fakeTraitReader{}, NewResponder(nil))
-	assertHandlerResponse(t, handlers.Create, http.MethodGet, "/members?org=alpha", "", http.StatusMethodNotAllowed, `{"Message":"Only POST requests are allowed at this route"}`)
 	assertHandlerResponse(t, handlers.Create, http.MethodPost, "/members", "", http.StatusBadRequest, `{"Message":"Request query parameters must contain org"}`)
 
 	recorder := httptest.NewRecorder()

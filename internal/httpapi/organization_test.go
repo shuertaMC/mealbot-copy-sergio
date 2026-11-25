@@ -68,7 +68,49 @@ func TestOrganizationHandlersPreserveSuccessContracts(t *testing.T) {
 	}
 }
 
-func TestOrganizationHandlersRejectMethodsAndQueryEdgeCases(t *testing.T) {
+func TestOrganizationsEndpointMethodRestriction(t *testing.T) {
+	store := &fakeOrganizationStore{}
+	handlers := NewOrganizationHandlers(store, NewResponder(nil))
+	assertHandlerResponse(t, handlers.Organizations, http.MethodPost, "/orgs?admin=owner", "", http.StatusMethodNotAllowed, `{"Message":"Only GET requests are allowed at this route"}`)
+	if store.calls != 0 {
+		t.Fatalf("store calls = %d, want 0", store.calls)
+	}
+}
+
+func TestOrganizationEndpointMethodRestriction(t *testing.T) {
+	store := &fakeOrganizationStore{}
+	handlers := NewOrganizationHandlers(store, NewResponder(nil))
+	assertHandlerResponse(t, handlers.Create, http.MethodGet, "/org?admin=owner", "", http.StatusMethodNotAllowed, `{"Message":"Only POST requests are allowed at this route"}`)
+	if store.calls != 0 {
+		t.Fatalf("store calls = %d, want 0", store.calls)
+	}
+}
+
+func TestCrossMatchTraitEndpointMethodRestriction(t *testing.T) {
+	store := &fakeOrganizationStore{}
+	handlers := NewOrganizationHandlers(store, NewResponder(nil))
+	assertHandlerResponse(t, handlers.CrossMatchTrait, http.MethodGet, "/crossmatchtrait?org=alpha", "", http.StatusMethodNotAllowed, `{"Message":"Only POST requests are allowed at this route"}`)
+	if store.calls != 0 {
+		t.Fatalf("store calls = %d, want 0", store.calls)
+	}
+}
+
+func TestOrganizationsEndpointRepositoryFailure(t *testing.T) {
+	handlers := NewOrganizationHandlers(&fakeOrganizationStore{err: errors.New("database unavailable")}, NewResponder(nil))
+	assertHandlerResponse(t, handlers.Organizations, http.MethodGet, "/orgs?admin=owner", "", http.StatusInternalServerError, `{"Message":"database unavailable"}`)
+}
+
+func TestOrganizationEndpointRepositoryFailure(t *testing.T) {
+	handlers := NewOrganizationHandlers(&fakeOrganizationStore{err: errors.New("database unavailable")}, NewResponder(nil))
+	assertHandlerResponse(t, handlers.Create, http.MethodPost, "/org?admin=owner", `{"org":"alpha"}`, http.StatusInternalServerError, `{"Message":"database unavailable"}`)
+}
+
+func TestCrossMatchTraitEndpointRepositoryFailure(t *testing.T) {
+	handlers := NewOrganizationHandlers(&fakeOrganizationStore{err: errors.New("database unavailable")}, NewResponder(nil))
+	assertHandlerResponse(t, handlers.CrossMatchTrait, http.MethodPost, "/crossmatchtrait?org=alpha", `{"trait":"x"}`, http.StatusInternalServerError, `{"Message":"database unavailable"}`)
+}
+
+func TestOrganizationHandlersRejectQueryEdgeCases(t *testing.T) {
 	store := &fakeOrganizationStore{}
 	handlers := NewOrganizationHandlers(store, NewResponder(nil))
 	cases := []struct {
@@ -80,9 +122,6 @@ func TestOrganizationHandlersRejectMethodsAndQueryEdgeCases(t *testing.T) {
 		status  int
 		want    string
 	}{
-		{"orgs method", handlers.Organizations, http.MethodPost, "/orgs?admin=owner", "", http.StatusMethodNotAllowed, `{"Message":"Only GET requests are allowed at this route"}`},
-		{"org method", handlers.Create, http.MethodGet, "/org?admin=owner", "", http.StatusMethodNotAllowed, `{"Message":"Only POST requests are allowed at this route"}`},
-		{"trait method", handlers.CrossMatchTrait, http.MethodGet, "/crossmatchtrait?org=alpha", "", http.StatusMethodNotAllowed, `{"Message":"Only POST requests are allowed at this route"}`},
 		{"orgs missing", handlers.Organizations, http.MethodGet, "/orgs", "", http.StatusBadRequest, `{"Message":"request query parameters must contain 'admin'"}`},
 		{"orgs duplicate", handlers.Organizations, http.MethodGet, "/orgs?admin=a&admin=b", "", http.StatusBadRequest, `{"Message":"request query parameters must contain 'admin'"}`},
 		{"org missing", handlers.Create, http.MethodPost, "/org", `{"org":"alpha"}`, http.StatusBadRequest, `{"Message":"request query parameters must contain 'admin'"}`},
@@ -113,14 +152,9 @@ func TestOrganizationHandlersValidateBodiesAndNullableTrait(t *testing.T) {
 	}
 }
 
-func TestOrganizationHandlersMapStoreFailuresAndEmptyResults(t *testing.T) {
-	store := &fakeOrganizationStore{err: errors.New("database unavailable")}
+func TestOrganizationHandlersMapEmptyResults(t *testing.T) {
+	store := &fakeOrganizationStore{}
 	handlers := NewOrganizationHandlers(store, NewResponder(nil))
-	assertHandlerResponse(t, handlers.Organizations, http.MethodGet, "/orgs?admin=owner", "", http.StatusInternalServerError, `{"Message":"database unavailable"}`)
-	assertHandlerResponse(t, handlers.Create, http.MethodPost, "/org?admin=owner", `{"org":"alpha"}`, http.StatusInternalServerError, `{"Message":"database unavailable"}`)
-	assertHandlerResponse(t, handlers.CrossMatchTrait, http.MethodPost, "/crossmatchtrait?org=alpha", `{"trait":"x"}`, http.StatusInternalServerError, `{"Message":"database unavailable"}`)
-
-	store.err = nil
 	store.organizations = nil
 	assertHandlerResponse(t, handlers.Organizations, http.MethodGet, "/orgs?admin=owner", "", http.StatusOK, `{"orgs":[]}`)
 }
