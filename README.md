@@ -136,31 +136,16 @@ CSV imports reject empty/header-only data, duplicate emails (case-insensitive), 
 
 See [`TESTING.md`](TESTING.md) for how to run the default, race, coverage, and PostgreSQL integration test suites.
 
-The managed project lifecycle runs these as separate gates: `install`, `format_check`, `build`, `smoke`, `unit_test`, `race_test`, `coverage`, `vet`, `govulncheck`, and the opt-in `postgres_integration`. Their repository equivalents are:
+Non-test quality gates:
 
 ```sh
 go mod download && go mod tidy && go mod tidy -diff
 test -z "$(gofmt -l cmd internal migrations)"
 go build -o mealbot ./cmd/mealbot
-go test -count=1 ./...
-go test -race -count=1 ./...
-go test -covermode=atomic -coverprofile=coverage.out ./internal/...
-go tool cover -func=coverage.out
 go vet ./...
 govulncheck ./...
 ```
 
-Internal aggregate statement coverage must remain at least 80%. Fast tests require no network, provider credentials, PostgreSQL, writable repository, or execution order. The authenticated organization/static smoke test and fake-backed `pair`, `migrate`, invalid-argument, and default-server lifecycle tests are part of the normal suite.
-
-To run the PostgreSQL suite, point only at an empty disposable PostgreSQL 17 database whose name contains `test`:
-
-```sh
-export RUN_POSTGRES_INTEGRATION=1
-export DATABASE_URL='postgresql://mealbot_test@127.0.0.1:5432/mealbot_test?sslmode=disable'
-go test -count=1 -tags=integration ./...
-```
-
-The integration suite resets that database, migrates from empty state, and exercises constraints, JSONB, reconciliation, rollback, round compaction, pair/triple history, due claims, and idempotent reconstruction. Auth tests generate local RSA keys and serve local JWKS responses; mail tests use an injected API and never call Mailgun.
 
 The pre-refactor `go test ./...` result captured before behavior moved into the modular packages is preserved in [`docs/baseline-test-result.md`](docs/baseline-test-result.md).
 
