@@ -47,7 +47,9 @@ func NewRouter(config RouterConfig) (http.Handler, error) {
 	}
 
 	mux := http.NewServeMux()
-	registerAPI := func(pattern string, handler http.Handler) { mux.Handle(pattern, config.Authenticate(handler)) }
+	registerAPI := func(pattern string, handler http.Handler) {
+		mux.Handle(pattern, config.CORS.Handler(withRequestTimeout(config.Authenticate(handler), config.RequestTimeout)))
+	}
 	registerAPI("/members", NewMembersHandler(config.Members, config.MaxBodyBytes, config.Logger))
 	registerAPI("/orgs", NewOrganizationsHandler(config.Organizations, config.Logger))
 	registerAPI("/org", NewCreateOrganizationHandler(config.Organizations, config.MaxBodyBytes, config.Logger))
@@ -55,9 +57,9 @@ func NewRouter(config RouterConfig) (http.Handler, error) {
 	registerAPI("/rounds", NewRoundsHandler(config.Rounds, config.Logger))
 	registerAPI("/round", NewRoundHandler(config.Rounds, config.Logger))
 	registerAPI("/pairs", NewPairsHandler(config.Pairs, config.Logger))
-	mux.Handle("/", http.FileServer(http.Dir(config.StaticDir)))
+	mux.Handle("/", withRequestTimeout(http.FileServer(http.Dir(config.StaticDir)), config.RequestTimeout))
 
-	return config.CORS.Handler(withRequestTimeout(mux, config.RequestTimeout)), nil
+	return mux, nil
 }
 
 func withRequestTimeout(next http.Handler, timeout time.Duration) http.Handler {

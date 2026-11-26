@@ -149,10 +149,16 @@ func TestRouterMiddlewareOrderStaticAndPrecedence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		recorder := httptest.NewRecorder()
-		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/"+asset, nil))
-		if recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), expected) {
-			t.Errorf("static %s = %d, exact=%v", asset, recorder.Code, bytes.Equal(recorder.Body.Bytes(), expected))
+		for _, origin := range []string{"", "https://forbidden.example"} {
+			request := httptest.NewRequest(http.MethodGet, "/"+asset, nil)
+			if origin != "" {
+				request.Header.Set("Origin", origin)
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), expected) {
+				t.Errorf("static %s origin %q = %d, exact=%v", asset, origin, recorder.Code, bytes.Equal(recorder.Body.Bytes(), expected))
+			}
 		}
 	}
 	missing := httptest.NewRecorder()
