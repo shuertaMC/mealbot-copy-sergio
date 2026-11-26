@@ -238,7 +238,7 @@ func memberMap(count int) MembersMap {
 	members := make(MembersMap, count)
 	for index := 0; index < count; index++ {
 		id := fmt.Sprintf("%c@example.test", 'a'+index)
-		members[id] = MinimalMember{ID: id, Name: fmt.Sprintf("Member %d", index), Trait: "red", LastRoundWith: map[string]int{}}
+		members[id] = MinimalMember{ID: id, Trait: "red", LastRoundWith: map[string]int{}}
 	}
 	return members
 }

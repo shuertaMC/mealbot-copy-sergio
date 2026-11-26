@@ -164,7 +164,7 @@ func (s *Scheduler) ProcessRound(ctx context.Context, scheduled domain.Round) er
 			traitValue = member.Metadata[*trait]
 		}
 		minimal[member.Email] = MinimalMember{
-			ID: member.Email, Name: member.Name, Trait: traitValue,
+			ID: member.Email, Trait: traitValue,
 			LastRoundWith: member.LastRoundWith,
 		}
 		byID[member.Email] = member

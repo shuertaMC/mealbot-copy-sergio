@@ -79,10 +79,9 @@ func (p Pair) String() string {
 }
 
 // Round records one computed round. DrawOrderedPairs is authoritative for
-// delivery and trace order; Pairs supports stable membership lookup only.
+// delivery and trace order.
 type Round struct {
 	Number           int
-	Pairs            map[Pair]bool
 	Paired           map[string]bool
 	DrawOrderedPairs []Pair
 }
@@ -91,7 +90,6 @@ type Round struct {
 func NewRound(roundNumber int) Round {
 	return Round{
 		Number:           roundNumber,
-		Pairs:            make(map[Pair]bool),
 		Paired:           make(map[string]bool),
 		DrawOrderedPairs: make([]Pair, 0),
 	}
@@ -117,7 +115,6 @@ func (r *Round) add(pair Pair) {
 	for _, id := range pair.Members() {
 		r.Paired[id] = true
 	}
-	r.Pairs[pair] = true
 	r.DrawOrderedPairs = append(r.DrawOrderedPairs, pair)
 }
 
@@ -138,7 +135,6 @@ func (r Round) String() string {
 // MinimalMember contains only state used while drawing pairings.
 type MinimalMember struct {
 	ID            string
-	Name          string
 	Trait         string
 	LastRoundWith map[string]int
 }
@@ -268,13 +264,11 @@ func draw(members MembersMap, roundNumber int, randomInt RandomIntGenerator) (Ro
 			return Round{}, 0, err
 		}
 		oldPair := round.DrawOrderedPairs[groupIndex]
-		delete(round.Pairs, oldPair)
 		triple, err := NewTriple(oldPair.ID1, oldPair.ID2, extraID)
 		if err != nil {
 			return Round{}, 0, err
 		}
 		round.DrawOrderedPairs[groupIndex] = triple
-		round.Pairs[triple] = true
 		round.Paired[extraID] = true
 		members.UpdateLastRoundWith(extraID, oldPair.ID1, roundNumber)
 		members.UpdateLastRoundWith(extraID, oldPair.ID2, roundNumber)
