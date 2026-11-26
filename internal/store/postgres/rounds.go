@@ -307,23 +307,21 @@ func lockOrganization(ctx context.Context, tx *sql.Tx, organization string) erro
 }
 
 func requireChanged(result sql.Result, resource, identifier string) error {
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("postgres inspect %s update: %w", resource, err)
-	}
-	if changed == 0 {
-		return domain.NewNotFoundError(resource, identifier)
-	}
-	return nil
+	return requireRowsAffected(result, resource, domain.NewNotFoundError(resource, identifier))
 }
 
 func requireClaimOwned(result sql.Result, operation string) error {
+	return requireRowsAffected(result, operation, domain.NewConflictError(operation, "scheduler claim is no longer owned", nil))
+}
+
+// requireRowsAffected returns zeroRows when the statement changed no rows.
+func requireRowsAffected(result sql.Result, operation string, zeroRows error) error {
 	changed, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("postgres inspect %s update: %w", operation, err)
 	}
 	if changed == 0 {
-		return domain.NewConflictError(operation, "scheduler claim is no longer owned", nil)
+		return zeroRows
 	}
 	return nil
 }
