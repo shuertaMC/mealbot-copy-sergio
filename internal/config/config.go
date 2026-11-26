@@ -297,6 +297,11 @@ func validateValues(values Values) error {
 	if err := validateDatabase(values); err != nil {
 		return err
 	}
+	if values.Mode == Development {
+		if err := validateDevelopmentProviders(values); err != nil {
+			return err
+		}
+	}
 	if values.Auth0Issuer != "" {
 		if err := validateHTTPURL("AUTH0_ISSUER", values.Auth0Issuer); err != nil {
 			return err
@@ -313,7 +318,7 @@ func validateValues(values Values) error {
 	if values.Mode == Production {
 		return validateProduction(values)
 	}
-	return validateDevelopmentProviders(values)
+	return nil
 }
 
 func validateDatabase(values Values) error {

@@ -274,6 +274,38 @@ func TestFromMapRejectsPartialProviderGroups(t *testing.T) {
 	}
 }
 
+func TestFromMapRejectsPartialAuth0GroupBeforeURLValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		values map[string]string
+	}{
+		{
+			name: "malformed issuer",
+			values: map[string]string{
+				"AUTH0_ISSUER": "tenant.example.test",
+			},
+		},
+		{
+			name: "malformed JWKS URL",
+			values: map[string]string{
+				"AUTH0_JWKS_URL": "file:///keys.json",
+			},
+		},
+	}
+
+	const want = "AUTH0_ISSUER, AUTH0_AUDIENCE, and AUTH0_JWKS_URL must be set together"
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.values["DB_USER"] = "local-user"
+			test.values["DB_NAME"] = "local-name"
+			_, err := FromMap(test.values)
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("FromMap() error = %v, want containing %q", err, want)
+			}
+		})
+	}
+}
+
 func TestProductionRequiresProviderConfiguration(t *testing.T) {
 	required := []string{
 		"AUTH0_ISSUER",
