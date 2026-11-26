@@ -134,6 +134,8 @@ CSV imports reject empty/header-only data, duplicate emails (case-insensitive), 
 
 ## Verification workflows
 
+See [`TESTING.md`](TESTING.md) for how to run the default, race, coverage, and PostgreSQL integration test suites.
+
 The managed project lifecycle runs these as separate gates: `install`, `format_check`, `build`, `smoke`, `unit_test`, `race_test`, `coverage`, `vet`, `govulncheck`, and the opt-in `postgres_integration`. Their repository equivalents are:
 
 ```sh
