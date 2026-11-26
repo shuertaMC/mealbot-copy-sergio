@@ -25,57 +25,25 @@ var (
 	ErrInvalidMembers = errors.New("pairing members are invalid")
 )
 
-// Pair is a canonical two- or three-member group. ExtraID is empty for a
-// pair. For a triple all three fields are lexicographically ordered.
-type Pair struct {
-	ID1     string
-	ID2     string
-	ExtraID string
-}
+// Pair is the shared canonical two- or three-member domain group.
+type Pair = domain.Pair
 
-// NewPair returns a two-person group in canonical order.
-func NewPair(id1, id2 string) Pair {
-	ids := []string{id1, id2}
-	sort.Strings(ids)
-	return Pair{ID1: ids[0], ID2: ids[1]}
+// NewPair validates and returns a two-person group in canonical order.
+func NewPair(id1, id2 string) (Pair, error) {
+	return canonicalGroup(id1, id2)
 }
 
 // NewTriple validates and returns a three-person group in canonical order.
 func NewTriple(id1, id2, extraID string) (Pair, error) {
-	ids := []string{id1, id2, extraID}
-	for _, id := range ids {
-		if strings.TrimSpace(id) == "" {
-			return Pair{}, fmt.Errorf("%w: group IDs must not be empty", ErrInvalidMembers)
-		}
-	}
-	sort.Strings(ids)
-	if ids[0] == ids[1] || ids[1] == ids[2] {
-		return Pair{}, fmt.Errorf("%w: group IDs must be distinct", ErrInvalidMembers)
-	}
-	return Pair{ID1: ids[0], ID2: ids[1], ExtraID: ids[2]}, nil
+	return canonicalGroup(id1, id2, extraID)
 }
 
-// Members returns the pair's IDs in canonical order.
-func (p Pair) Members() []string {
-	ids := []string{p.ID1, p.ID2}
-	if p.ExtraID != "" {
-		ids = append(ids, p.ExtraID)
+func canonicalGroup(id1, id2 string, extraID ...string) (Pair, error) {
+	pair, err := domain.NewPair(id1, id2, extraID...)
+	if err != nil {
+		return Pair{}, fmt.Errorf("%w: %w", ErrInvalidMembers, err)
 	}
-	return ids
-}
-
-// Domain validates and converts a pairing group to the shared persistence
-// model.
-func (p Pair) Domain() (domain.Pair, error) {
-	if p.ExtraID == "" {
-		return domain.NewPair(p.ID1, p.ID2)
-	}
-	return domain.NewPair(p.ID1, p.ID2, p.ExtraID)
-}
-
-// String formats a fixed-width row compatible with the legacy pairing trace.
-func (p Pair) String() string {
-	return fmt.Sprintf("%-40s %-40s %-40s", p.ID1, p.ID2, p.ExtraID)
+	return pair, nil
 }
 
 // Round records one computed round. DrawOrderedPairs is authoritative for
@@ -95,10 +63,15 @@ func NewRound(roundNumber int) Round {
 	}
 }
 
-// AddPair records a canonical two-person group at the end of draw order.
-func (r *Round) AddPair(member1, member2 string) {
-	pair := NewPair(member1, member2)
+// AddPair records a validated canonical two-person group at the end of draw
+// order.
+func (r *Round) AddPair(member1, member2 string) error {
+	pair, err := NewPair(member1, member2)
+	if err != nil {
+		return err
+	}
 	r.add(pair)
+	return nil
 }
 
 // AddTriple records a canonical triple at the end of draw order.
@@ -251,7 +224,9 @@ func draw(members MembersMap, roundNumber int, randomInt RandomIntGenerator) (Ro
 		if err != nil {
 			return Round{}, 0, err
 		}
-		round.AddPair(memberID, partner)
+		if err := round.AddPair(memberID, partner); err != nil {
+			return Round{}, 0, err
+		}
 		members.UpdateLastRoundWith(memberID, partner, roundNumber)
 		if recent {
 			recentMatches++
@@ -383,7 +358,7 @@ func selectIndex(randomInt RandomIntGenerator, size int) (int, error) {
 func cloneMembers(source MembersMap) (MembersMap, error) {
 	clone := make(MembersMap, len(source))
 	for key, member := range source {
-		if strings.TrimSpace(key) == "" || member.ID != key {
+		if key == "" || member.ID == "" || strings.TrimSpace(key) != key || strings.TrimSpace(member.ID) != member.ID || member.ID != key {
 			return nil, fmt.Errorf("%w: map key %q does not match member ID %q", ErrInvalidMembers, key, member.ID)
 		}
 		member.LastRoundWith = cloneHistory(member.LastRoundWith)

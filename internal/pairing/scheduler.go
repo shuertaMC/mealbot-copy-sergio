@@ -191,11 +191,7 @@ func (s *Scheduler) ProcessRound(ctx context.Context, scheduled domain.Round) er
 		if err := s.delivery.Deliver(ctx, message); err != nil {
 			return fmt.Errorf("pairing deliver group: %w", err)
 		}
-		pair, err := group.Domain()
-		if err != nil {
-			return fmt.Errorf("pairing convert group: %w", err)
-		}
-		persisted = append(persisted, pair)
+		persisted = append(persisted, group)
 	}
 	if err := s.persistence.PersistPairings(ctx, scheduled.Organization, scheduled.ID, scheduled.ClaimToken, persisted); err != nil {
 		return fmt.Errorf("pairing persist round: %w", err)

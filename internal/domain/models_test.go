@@ -161,6 +161,17 @@ func TestPairRejectsInvalidMembership(t *testing.T) {
 	}
 }
 
+func TestPairStringPreservesLegacyFixedWidthFormat(t *testing.T) {
+	pair, err := NewPair("z", "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "a" + strings.Repeat(" ", 40) + "z" + strings.Repeat(" ", 80)
+	if got := pair.String(); got != want {
+		t.Fatalf("Pair.String() = %q, want %q", got, want)
+	}
+}
+
 func TestRoundConstructionAndValidation(t *testing.T) {
 	scheduled := time.Date(2027, time.January, 5, 12, 30, 0, 0, time.UTC)
 	round, err := NewRound(" org ", 2, scheduled)

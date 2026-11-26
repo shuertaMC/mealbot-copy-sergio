@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/johnamadeo/mealbot/internal/domain"
 )
 
 func TestRunPopulationPolicies(t *testing.T) {
@@ -195,26 +197,55 @@ func TestRunRejectsInvalidSelectorWithoutMutation(t *testing.T) {
 }
 
 func TestEngineValidationAndFormatting(t *testing.T) {
-	if pair := NewPair("z", "a"); pair != (Pair{ID1: "a", ID2: "z"}) {
-		t.Fatalf("NewPair = %#v", pair)
+	constructors := []struct {
+		name      string
+		construct func() (Pair, error)
+		want      Pair
+	}{
+		{name: "pair orders", construct: func() (Pair, error) { return NewPair("z", "a") }, want: Pair{ID1: "a", ID2: "z"}},
+		{name: "pair trims", construct: func() (Pair, error) { return NewPair(" z ", " a ") }, want: Pair{ID1: "a", ID2: "z"}},
+		{name: "triple orders", construct: func() (Pair, error) { return NewTriple("c", "a", "b") }, want: Pair{ID1: "a", ID2: "b", ExtraID: "c"}},
+		{name: "triple trims", construct: func() (Pair, error) { return NewTriple(" c ", " a ", " b ") }, want: Pair{ID1: "a", ID2: "b", ExtraID: "c"}},
 	}
-	triple, err := NewTriple("c", "a", "b")
-	if err != nil || triple != (Pair{ID1: "a", ID2: "b", ExtraID: "c"}) {
-		t.Fatalf("NewTriple = %#v, %v", triple, err)
+	for _, test := range constructors {
+		t.Run(test.name, func(t *testing.T) {
+			group, err := test.construct()
+			if err != nil || group != test.want {
+				t.Fatalf("constructor = %#v, %v; want %#v", group, err, test.want)
+			}
+		})
 	}
-	if _, err := NewTriple("a", "a", "b"); !errors.Is(err, ErrInvalidMembers) {
-		t.Fatalf("duplicate triple error = %v", err)
+
+	invalid := []struct {
+		name      string
+		construct func() (Pair, error)
+	}{
+		{name: "blank pair", construct: func() (Pair, error) { return NewPair(" ", "b") }},
+		{name: "duplicate pair", construct: func() (Pair, error) { return NewPair("a", "a") }},
+		{name: "blank triple", construct: func() (Pair, error) { return NewTriple("a", "b", " ") }},
+		{name: "duplicate triple", construct: func() (Pair, error) { return NewTriple("a", "a", "b") }},
 	}
-	if _, err := (Pair{ID1: "a", ID2: "b", ExtraID: "c"}).Domain(); err != nil {
-		t.Fatalf("Domain: %v", err)
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := test.construct()
+			if !errors.Is(err, ErrInvalidMembers) || !domain.IsValidation(err) {
+				t.Fatalf("constructor error = %v, want pairing and domain validation classifications", err)
+			}
+		})
 	}
+
 	round := NewRound(3)
-	round.AddPair("z", "a")
-	if !round.IsPaired("a") || !strings.HasPrefix(round.String(), "---------\nRound 3\n---------\n") || !strings.Contains(round.String(), "a") {
-		t.Fatalf("round formatting = %q", round.String())
+	if err := round.AddPair("z", "a"); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(round.DrawOrderedPairs[0].String(), "z") {
-		t.Fatalf("pair formatting = %q", round.DrawOrderedPairs[0].String())
+	pairText := "a" + strings.Repeat(" ", 40) + "z" + strings.Repeat(" ", 80)
+	wantRound := "---------\nRound 3\n---------\n" + pairText + "\n"
+	if !round.IsPaired("a") || round.String() != wantRound {
+		t.Fatalf("round formatting = %q, want %q", round.String(), wantRound)
+	}
+	before := round
+	if err := round.AddPair("a", " a "); !errors.Is(err, ErrInvalidMembers) || !reflect.DeepEqual(round, before) {
+		t.Fatalf("invalid AddPair error = %v, round = %#v; want unchanged %#v", err, round, before)
 	}
 	members := memberMap(2)
 	setHistory(members, "a@example.test", "b@example.test", 1)
@@ -231,6 +262,29 @@ func TestEngineValidationAndFormatting(t *testing.T) {
 	bad := MembersMap{"a": {ID: "b"}}
 	if _, _, err := Run(bad, 1, func(int) int { return 0 }); !errors.Is(err, ErrInvalidMembers) {
 		t.Fatalf("bad member error = %v", err)
+	}
+}
+
+func TestRunRejectsNonCanonicalMemberIDsBeforeSelection(t *testing.T) {
+	tests := []MembersMap{
+		{" a@example.test ": {ID: " a@example.test ", LastRoundWith: map[string]int{}}},
+		{"a@example.test": {ID: " a@example.test ", LastRoundWith: map[string]int{}}},
+	}
+	for index, members := range tests {
+		t.Run(fmt.Sprintf("case_%d", index), func(t *testing.T) {
+			before := cloneForTestUnchecked(members)
+			selectorCalled := false
+			returned, _, err := Run(members, 1, func(int) int {
+				selectorCalled = true
+				return 0
+			})
+			if !errors.Is(err, ErrInvalidMembers) {
+				t.Fatalf("Run error = %v, want ErrInvalidMembers", err)
+			}
+			if selectorCalled || returned != nil || !reflect.DeepEqual(members, before) {
+				t.Fatalf("invalid input was used or mutated: called=%t returned=%#v members=%#v", selectorCalled, returned, members)
+			}
+		})
 	}
 }
 
@@ -251,6 +305,15 @@ func cloneForTest(members MembersMap) MembersMap {
 	clone, err := cloneMembers(members)
 	if err != nil {
 		panic(err)
+	}
+	return clone
+}
+
+func cloneForTestUnchecked(members MembersMap) MembersMap {
+	clone := make(MembersMap, len(members))
+	for id, member := range members {
+		member.LastRoundWith = cloneHistory(member.LastRoundWith)
+		clone[id] = member
 	}
 	return clone
 }

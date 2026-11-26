@@ -20,7 +20,7 @@ func TestSchedulerClaimsDeliversThenPersists(t *testing.T) {
 		members: domainMembers(t, 4),
 		trait:   stringPointer("team"),
 	}
-	delivery := &recordingDelivery{}
+	delivery := &recordingDelivery{events: &repository.events}
 	scheduler := mustScheduler(t, repository, delivery, ClockFunc(func() time.Time { return now }))
 	if err := scheduler.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -34,14 +34,21 @@ func TestSchedulerClaimsDeliversThenPersists(t *testing.T) {
 	if repository.persistToken != "claim-acme-4" {
 		t.Fatalf("persist token = %q, want returned claim token", repository.persistToken)
 	}
+	wantPairs := []domain.Pair{
+		{ID1: "a@example.test", ID2: "b@example.test"},
+		{ID1: "c@example.test", ID2: "d@example.test"},
+	}
+	if !reflect.DeepEqual(repository.persisted, wantPairs) {
+		t.Fatalf("persisted pairs = %#v, want %#v", repository.persisted, wantPairs)
+	}
 	if delivery.messages[0].From != "acme Mealbot <bot@example.test>" || delivery.messages[0].Subject != mailer.EmailSubject {
 		t.Fatalf("first message = %#v", delivery.messages[0])
 	}
 	if !strings.Contains(delivery.messages[0].Text, "Member 0") || !strings.Contains(delivery.messages[0].Text, "Member 1") {
 		t.Fatalf("first message body = %q", delivery.messages[0].Text)
 	}
-	if repository.events[len(repository.events)-1] != "persist" {
-		t.Fatalf("event order = %v", repository.events)
+	if wantEvents := []string{"deliver", "deliver", "persist"}; !reflect.DeepEqual(repository.events, wantEvents) {
+		t.Fatalf("event order = %v, want %v", repository.events, wantEvents)
 	}
 }
 
@@ -301,10 +308,14 @@ type recordingDelivery struct {
 	calls    int
 	failAt   int
 	err      error
+	events   *[]string
 }
 
 func (delivery *recordingDelivery) Deliver(_ context.Context, message mailer.Message) error {
 	delivery.calls++
+	if delivery.events != nil {
+		*delivery.events = append(*delivery.events, "deliver")
+	}
 	if delivery.failAt == delivery.calls {
 		return delivery.err
 	}

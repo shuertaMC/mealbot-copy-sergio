@@ -174,6 +174,11 @@ func (p Pair) Members() []string {
 	return members
 }
 
+// String formats a fixed-width row compatible with the legacy pairing trace.
+func (p Pair) String() string {
+	return fmt.Sprintf("%-40s %-40s %-40s", p.ID1, p.ID2, p.ExtraID)
+}
+
 // Round is one scheduled organization pairing round and its completion state.
 type Round struct {
 	Organization string    `json:"organization"`
