@@ -59,6 +59,7 @@ type Scheduler interface {
 type HTTPServer interface {
 	ListenAndServe() error
 	Shutdown(context.Context) error
+	Close() error
 }
 
 // Factories defines every external construction seam used by Execute. Tests
@@ -240,11 +241,16 @@ func serve(ctx context.Context, server HTTPServer, shutdownTimeout time.Duration
 		shutdownContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer cancel()
 		shutdownErr := server.Shutdown(shutdownContext)
+		var closeErr error
+		if shutdownErr != nil {
+			// Shutdown leaves active connections open when its context expires.
+			closeErr = server.Close()
+		}
 		serveErr := <-serveErrors
 		if errors.Is(serveErr, http.ErrServerClosed) {
 			serveErr = nil
 		}
-		return errors.Join(shutdownErr, serveErr)
+		return errors.Join(shutdownErr, closeErr, serveErr)
 	}
 }
 

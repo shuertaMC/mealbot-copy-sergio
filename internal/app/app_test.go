@@ -125,7 +125,9 @@ type fakeServer struct {
 	once        sync.Once
 	serveErr    error
 	shutdownErr error
+	closeErr    error
 	shutdowns   int
+	closes      int
 }
 
 func newFakeServer() *fakeServer {
@@ -141,8 +143,16 @@ func (s *fakeServer) ListenAndServe() error {
 }
 func (s *fakeServer) Shutdown(context.Context) error {
 	s.shutdowns++
+	if s.shutdownErr != nil {
+		return s.shutdownErr
+	}
 	s.once.Do(func() { close(s.stop) })
-	return s.shutdownErr
+	return nil
+}
+func (s *fakeServer) Close() error {
+	s.closes++
+	s.once.Do(func() { close(s.stop) })
+	return s.closeErr
 }
 
 func testFactories(t *testing.T, repository *fakeRepository, scheduler *fakeScheduler, server *fakeServer) Factories {
@@ -233,6 +243,25 @@ func TestExecuteFailuresAreSurfacedAndCloseOnce(t *testing.T) {
 		if err == nil || repository.closes != 1 {
 			t.Errorf("%s failure = %v, closes %d", command, err, repository.closes)
 		}
+	}
+}
+
+func TestExecuteForceClosesServerAfterGracefulShutdownFailure(t *testing.T) {
+	shutdownErr := errors.New("graceful shutdown failed")
+	closeErr := errors.New("forced close failed")
+	repository := &fakeRepository{}
+	server := newFakeServer()
+	server.shutdownErr = shutdownErr
+	server.closeErr = closeErr
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := Execute(ctx, nil, testFactories(t, repository, &fakeScheduler{}, server))
+	if !errors.Is(err, shutdownErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("Execute() error = %v, want shutdown and close errors", err)
+	}
+	if server.shutdowns != 1 || server.closes != 1 || repository.closes != 1 {
+		t.Fatalf("lifecycle calls = shutdowns %d, server closes %d, repository closes %d", server.shutdowns, server.closes, repository.closes)
 	}
 }
 
