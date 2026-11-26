@@ -90,10 +90,6 @@ func ParseArgs(args []string) (Command, error) {
 	return "", fmt.Errorf("argument '%s' not recognized", strings.Join(args, " "))
 }
 
-// Run starts the production application using os.Args and environment-backed
-// configuration. RunArgs is preferred by command tests.
-func Run(ctx context.Context) error { return RunArgs(ctx, os.Args[1:]) }
-
 // RunArgs starts the production application for an explicit argument slice.
 func RunArgs(ctx context.Context, args []string) error {
 	return Execute(ctx, args, ProductionFactories())
