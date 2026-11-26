@@ -8,7 +8,6 @@ import (
 const (
 	allowMethods = "GET, POST, DELETE, OPTIONS"
 	allowHeaders = "Authorization, Content-Type, Origin, Accept, token"
-	corsError    = "{\"error\":\"origin not allowed\"}\n"
 )
 
 var allowedCORSMethods = map[string]struct{}{
@@ -104,7 +103,5 @@ func addVaryOrigin(header http.Header) {
 }
 
 func writeCORSForbidden(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusForbidden)
-	_, _ = w.Write([]byte(corsError))
+	newResponder(nil).json(w, http.StatusForbidden, errorResponse{Error: "origin not allowed"})
 }

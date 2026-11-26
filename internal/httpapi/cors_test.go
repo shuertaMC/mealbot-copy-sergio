@@ -7,7 +7,10 @@ import (
 	"testing"
 )
 
-const allowedOrigin = "https://app.example"
+const (
+	allowedOrigin     = "https://app.example"
+	corsForbiddenBody = "{\"error\":\"origin not allowed\"}\n"
+)
 
 func TestCORSAllowedOriginDelegatesAndSetsContract(t *testing.T) {
 	called := false
@@ -54,7 +57,7 @@ func TestCORSRejectsDisallowedOrigin(t *testing.T) {
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
 	}
-	if response.Body.String() != corsError {
+	if response.Body.String() != corsForbiddenBody {
 		t.Fatalf("body = %q", response.Body.String())
 	}
 	if got := response.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
@@ -104,7 +107,7 @@ func TestCORSPreflightRejectsUnsupportedRequest(t *testing.T) {
 			}
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, req)
-			if response.Code != http.StatusForbidden || response.Body.String() != corsError {
+			if response.Code != http.StatusForbidden || response.Body.String() != corsForbiddenBody {
 				t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
 			}
 			assertVaryOrigin(t, response.Header())
