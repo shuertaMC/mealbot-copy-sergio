@@ -78,6 +78,10 @@ func TestOrganizationServiceValidationOrderingAndClearing(t *testing.T) {
 	if repository.updatedTrait != nil {
 		t.Fatalf("empty trait = %#v; want cleared", repository.updatedTrait)
 	}
+	blank := "  "
+	if err := service.SetCrossMatchTrait(context.Background(), "org", &blank); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("blank trait error = %v", err)
+	}
 }
 
 type fakeOrganizationUseCases struct {

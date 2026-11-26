@@ -52,7 +52,7 @@ func TestOrganizationRepositoryMethods(t *testing.T) {
 	if err != nil || trait != nil {
 		t.Fatalf("unset CrossMatchTrait = %v, %v", trait, err)
 	}
-	mock.ExpectExec("UPDATE organizations SET cross_match_trait").WithArgs("office", "gamma").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE organizations SET cross_match_trait").WithArgs(" office ", "gamma").WillReturnResult(sqlmock.NewResult(0, 1))
 	updated := " office "
 	if err := repository.UpdateCrossMatchTrait(ctx, "gamma", &updated); err != nil {
 		t.Fatalf("UpdateCrossMatchTrait: %v", err)

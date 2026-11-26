@@ -92,6 +92,9 @@ func (r *Repository) UpdateCrossMatchTrait(ctx context.Context, organization str
 	if trait != nil && *trait == "" {
 		trait = nil
 	}
+	if trait != nil && strings.TrimSpace(*trait) == "" {
+		return domain.NewValidationError("organization.crossMatchTrait", "must not be blank when set")
+	}
 	result, err := r.db.ExecContext(ctx,
 		"UPDATE organizations SET cross_match_trait = $1 WHERE name = $2",
 		nullableString(trait), organization)

@@ -79,6 +79,9 @@ func (s *OrganizationService) SetCrossMatchTrait(ctx context.Context, organizati
 	if trait != nil && *trait == "" {
 		trait = nil
 	}
+	if trait != nil && strings.TrimSpace(*trait) == "" {
+		return domain.NewValidationError("organization.crossMatchTrait", "must not be blank when set")
+	}
 	return s.repository.UpdateCrossMatchTrait(ctx, organization, trait)
 }
 
