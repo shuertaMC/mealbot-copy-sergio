@@ -28,7 +28,8 @@ func NewMiddleware(validator TokenValidator) Middleware {
 }
 
 // Handler wraps next with strict Authorization parsing and token validation.
-// The accepted form is exactly one header containing "Bearer <token>".
+// The accepted form is exactly one header with a case-insensitive Bearer
+// scheme, one ASCII space, and a non-empty whitespace-free token.
 func (m Middleware) Handler(next http.Handler) http.Handler {
 	if next == nil {
 		next = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
@@ -54,10 +55,10 @@ func bearerToken(values []string) (string, bool) {
 	}
 	const prefix = "Bearer "
 	value := values[0]
-	if !strings.HasPrefix(value, prefix) {
+	if len(value) < len(prefix) || !strings.EqualFold(value[:len(prefix)], prefix) {
 		return "", false
 	}
-	token := strings.TrimPrefix(value, prefix)
+	token := value[len(prefix):]
 	if token == "" || strings.ContainsAny(token, " \t\r\n") {
 		return "", false
 	}
