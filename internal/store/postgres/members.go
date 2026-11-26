@@ -72,14 +72,8 @@ func (r *Repository) ReconcileMembers(ctx context.Context, organization string, 
 	if err != nil {
 		return nil, fmt.Errorf("postgres begin reconcile members: %w", err)
 	}
-	var lockedName string
-	if err := tx.QueryRowContext(ctx,
-		"SELECT name FROM organizations WHERE name = $1 FOR UPDATE", organization,
-	).Scan(&lockedName); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, rollback(tx, domain.NewNotFoundError("organization", organization))
-		}
-		return nil, rollback(tx, mapDatabaseError("lock organization", err))
+	if err := lockOrganization(ctx, tx, organization); err != nil {
+		return nil, rollback(tx, err)
 	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT organization, email, name, metadata, active, last_round_with

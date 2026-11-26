@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"strings"
 
 	"github.com/johnamadeo/mealbot/internal/domain"
@@ -115,14 +114,7 @@ func (r *Repository) UpdateCrossMatchTrait(ctx context.Context, organization str
 	if err != nil {
 		return mapDatabaseError("update cross-match trait", err)
 	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("postgres update cross-match trait rows: %w", err)
-	}
-	if changed == 0 {
-		return domain.NewNotFoundError("organization", organization)
-	}
-	return nil
+	return requireChanged(result, "organization", organization)
 }
 
 type rowScanner interface {

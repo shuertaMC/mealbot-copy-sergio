@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/johnamadeo/mealbot/internal/domain"
@@ -189,7 +188,7 @@ func (r *Repository) PersistPairings(ctx context.Context, organization string, r
 		}
 		updatePairHistory(members, pair, roundID)
 	}
-	for _, email := range sortedDomainMemberKeys(members) {
+	for _, email := range sortedMemberKeys(members) {
 		if _, changed := seenMembers[email]; !changed {
 			continue
 		}
@@ -316,7 +315,7 @@ func reconstructOrganizationHistoryTx(ctx context.Context, tx *sql.Tx, organizat
 		}
 		updatePairHistory(members, item.pair, item.round)
 	}
-	for _, email := range sortedDomainMemberKeys(members) {
+	for _, email := range sortedMemberKeys(members) {
 		history, err := encodeHistory(members[email].LastRoundWith)
 		if err != nil {
 			return domain.NewIntegrityError("encode reconstructed history", "invalid history", err)
@@ -365,15 +364,6 @@ func loadMembersForUpdate(ctx context.Context, tx *sql.Tx, organization string) 
 		members[member.Email] = member
 	}
 	return members, nil
-}
-
-func sortedDomainMemberKeys(members map[string]domain.Member) []string {
-	keys := make([]string, 0, len(members))
-	for key := range members {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func nullableExtraID(extraID string) any {
