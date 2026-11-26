@@ -1,1 +1,1 @@
-web: mealbot
+web: ./mealbot

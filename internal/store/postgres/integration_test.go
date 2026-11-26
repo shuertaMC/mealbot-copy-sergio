@@ -1,0 +1,562 @@
+package postgres
+
+import (
+	"context"
+	"database/sql"
+	_ "embed"
+	"errors"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/johnamadeo/mealbot/internal/domain"
+	postgrestest "github.com/johnamadeo/mealbot/internal/testsupport/postgres"
+)
+
+//go:embed testdata/reset.sql
+var resetSQL string
+
+func TestPostgresRepositoryIntegration(t *testing.T) {
+	if os.Getenv("RUN_POSTGRES_INTEGRATION") != "1" {
+		t.Skip("set RUN_POSTGRES_INTEGRATION=1 with a disposable DATABASE_URL")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if _, err := postgrestest.ValidateDatabaseURL(databaseURL); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	db, err := sql.Open(driverName, databaseURL)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close integration database: %v", err)
+		}
+	})
+	postgrestest.AcquireSuiteLock(t, ctx, db)
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatalf("database ping: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, resetSQL); err != nil {
+		t.Fatalf("reset database: %v", err)
+	}
+	repository, err := New(db)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatalf("first Migrate: %v", err)
+	}
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatalf("idempotent Migrate: %v", err)
+	}
+
+	trait := "team"
+	organization, _ := domain.NewOrganization("integration-org", "admin@example.test", nil)
+	if err := repository.CreateOrganization(ctx, organization); err != nil {
+		t.Fatalf("CreateOrganization: %v", err)
+	}
+	if err := repository.CreateOrganization(ctx, organization); !domain.IsConflict(err) {
+		t.Fatalf("duplicate organization error = %v, want conflict", err)
+	}
+	if err := repository.UpdateCrossMatchTrait(ctx, organization.Name, &trait); err != nil {
+		t.Fatalf("UpdateCrossMatchTrait: %v", err)
+	}
+	gotTrait, err := repository.CrossMatchTrait(ctx, organization.Name)
+	if err != nil || gotTrait == nil || *gotTrait != trait {
+		t.Fatalf("CrossMatchTrait = %v, %v", gotTrait, err)
+	}
+	organizations, err := repository.ListOrganizations(ctx, organization.Admin)
+	if err != nil || len(organizations) != 1 {
+		t.Fatalf("ListOrganizations = %#v, %v", organizations, err)
+	}
+
+	memberA := integrationMember(t, organization.Name, "a@example.test", "Alpha", map[string]string{"team": "red"})
+	memberB := integrationMember(t, organization.Name, "b@example.test", "Beta", map[string]string{"team": "blue"})
+	memberC := integrationMember(t, organization.Name, "c@example.test", "Gamma", map[string]string{"team": "green"})
+	active, err := repository.ReconcileMembers(ctx, organization.Name, []domain.Member{memberA, memberB, memberC})
+	if err != nil || len(active) != 3 {
+		t.Fatalf("initial ReconcileMembers = %#v, %v", active, err)
+	}
+	memberA.Name = "Alpha Updated"
+	active, err = repository.ReconcileMembers(ctx, organization.Name, []domain.Member{memberA, memberC})
+	if err != nil || len(active) != 2 {
+		t.Fatalf("deactivate ReconcileMembers = %#v, %v", active, err)
+	}
+	allMembers, err := repository.ListMembers(ctx, organization.Name, false)
+	if err != nil || len(allMembers) != 3 {
+		t.Fatalf("historical ListMembers = %#v, %v", allMembers, err)
+	}
+	assertMemberState(t, allMembers, "a@example.test", true, "Alpha Updated")
+	assertMemberState(t, allMembers, "b@example.test", false, "Beta")
+	active, err = repository.ReconcileMembers(ctx, organization.Name, []domain.Member{memberA, memberB, memberC})
+	if err != nil || len(active) != 3 {
+		t.Fatalf("reactivate ReconcileMembers = %#v, %v", active, err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE FUNCTION mealbot_test_fail_member_reconcile() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.email = 'b@example.test' THEN
+				RAISE EXCEPTION 'injected member reconciliation failure';
+			END IF;
+			RETURN NEW;
+		END $$;
+		CREATE TRIGGER mealbot_test_fail_member_reconcile BEFORE INSERT OR UPDATE ON members
+		FOR EACH ROW EXECUTE FUNCTION mealbot_test_fail_member_reconcile()`); err != nil {
+		t.Fatalf("create member reconciliation failure trigger: %v", err)
+	}
+	failedMemberA := memberA.Clone()
+	failedMemberA.Name = "Alpha Transaction Attempt"
+	failedActive, err := repository.ReconcileMembers(ctx, organization.Name, []domain.Member{failedMemberA, memberB, memberC})
+	if err == nil || failedActive != nil {
+		t.Fatalf("ReconcileMembers injected failure = %#v, %v", failedActive, err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		DROP TRIGGER mealbot_test_fail_member_reconcile ON members;
+		DROP FUNCTION mealbot_test_fail_member_reconcile()`); err != nil {
+		t.Fatalf("drop member reconciliation failure trigger: %v", err)
+	}
+	rolledBackMembers, err := repository.ListMembers(ctx, organization.Name, false)
+	if err != nil {
+		t.Fatalf("read member reconciliation rollback state: %v", err)
+	}
+	assertMemberState(t, rolledBackMembers, memberA.Email, true, "Alpha Updated")
+	assertMemberState(t, rolledBackMembers, memberB.Email, true, "Beta")
+
+	base := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
+	round0, err := repository.AddRound(ctx, organization.Name, base)
+	if err != nil || round0.ID != 0 {
+		t.Fatalf("AddRound zero = %#v, %v", round0, err)
+	}
+	round1, _ := repository.AddRound(ctx, organization.Name, base.Add(time.Hour))
+	round2, _ := repository.AddRound(ctx, organization.Name, base.Add(2*time.Hour))
+	round3, _ := repository.AddRound(ctx, organization.Name, base.Add(3*time.Hour))
+	newTime := base.Add(24 * time.Hour)
+	if err := repository.RescheduleRound(ctx, organization.Name, round1.ID, newTime); err != nil {
+		t.Fatalf("RescheduleRound: %v", err)
+	}
+	pairAB, _ := domain.NewPair(memberA.Email, memberB.Email)
+	triple, _ := domain.NewPair(memberA.Email, memberB.Email, memberC.Email)
+	claim0 := claimRoundForIntegration(t, ctx, repository, base, round0.ID)
+	if err := repository.PersistPairings(ctx, organization.Name, round0.ID, claim0.ClaimToken, nil); err != nil {
+		t.Fatalf("PersistPairings empty: %v", err)
+	}
+	claim2 := claimRoundForIntegration(t, ctx, repository, base.Add(2*time.Hour), round2.ID)
+	if err := repository.PersistPairings(ctx, organization.Name, round2.ID, claim2.ClaimToken, []domain.Pair{pairAB}); err != nil {
+		t.Fatalf("PersistPairings pair: %v", err)
+	}
+	claim3 := claimRoundForIntegration(t, ctx, repository, base.Add(3*time.Hour), round3.ID)
+	if err := repository.PersistPairings(ctx, organization.Name, round3.ID, claim3.ClaimToken, []domain.Pair{triple}); err != nil {
+		t.Fatalf("PersistPairings triple: %v", err)
+	}
+	if err := repository.DeleteRound(ctx, organization.Name, round1.ID); err != nil {
+		t.Fatalf("DeleteRound: %v", err)
+	}
+	rounds, err := repository.ListRounds(ctx, organization.Name)
+	if err != nil || len(rounds) != 3 || rounds[0].ID != 0 || rounds[1].ID != 1 || rounds[2].ID != 2 {
+		t.Fatalf("compacted ListRounds = %#v, %v", rounds, err)
+	}
+	pairRounds, err := repository.ListPairs(ctx, organization.Name)
+	if err != nil || len(pairRounds) != 3 || pairRounds[0].ID != 0 || len(pairRounds[0].Pairs) != 0 ||
+		pairRounds[1].ID != 1 || len(pairRounds[1].Pairs) != 1 || pairRounds[2].ID != 2 || len(pairRounds[2].Pairs) != 1 {
+		t.Fatalf("compacted ListPairs = %#v, %v", pairRounds, err)
+	}
+	allMembers, _ = repository.ListMembers(ctx, organization.Name, false)
+	assertSymmetricRound(t, allMembers, memberA.Email, memberB.Email, 2)
+	assertSymmetricRound(t, allMembers, memberA.Email, memberC.Email, 2)
+
+	if _, err := repository.ReconcileMembers(ctx, organization.Name, []domain.Member{memberA, memberC}); err != nil {
+		t.Fatalf("deactivate historical member: %v", err)
+	}
+	historical, err := repository.ListHistoricalPairs(ctx, organization.Name)
+	if err != nil || len(historical) != 3 || len(historical[0].Pairs) != 0 || historical[1].Pairs[0].Member2.Active {
+		t.Fatalf("ListHistoricalPairs = %#v, %v", historical, err)
+	}
+	if err := repository.ReconstructOrganizationHistory(ctx, organization.Name); err != nil {
+		t.Fatalf("ReconstructOrganizationHistory: %v", err)
+	}
+	if err := repository.ReconstructHistory(ctx); err != nil {
+		t.Fatalf("idempotent ReconstructHistory: %v", err)
+	}
+
+	due, _ := repository.AddRound(ctx, organization.Name, base.Add(-time.Hour))
+	_, _ = repository.AddRound(ctx, organization.Name, base.Add(24*time.Hour))
+	claimed, err := repository.ClaimDueRounds(ctx, base, base.Add(-15*time.Minute), 10)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != due.ID {
+		t.Fatalf("ClaimDueRounds = %#v, %v", claimed, err)
+	}
+	firstToken := claimed[0].ClaimToken
+	if firstToken == "" {
+		t.Fatal("ClaimDueRounds returned an empty owner token")
+	}
+	entries, err := migrationEntries()
+	if err != nil {
+		t.Fatalf("read migrations for idempotence check: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, entries[3].sql); err != nil {
+		t.Fatalf("re-execute stable claim migration: %v", err)
+	}
+	var retainedToken string
+	if err := db.QueryRowContext(ctx, `
+		SELECT processing_token FROM rounds WHERE organization = $1 AND id = $2`,
+		organization.Name, due.ID,
+	).Scan(&retainedToken); err != nil || retainedToken != firstToken {
+		t.Fatalf("tokenized claim after migration re-execution = %q, %v; want %q", retainedToken, err, firstToken)
+	}
+	again, err := repository.ClaimDueRounds(ctx, base, base.Add(-15*time.Minute), 10)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("second ClaimDueRounds = %#v, %v", again, err)
+	}
+	if err := repository.ReleaseRoundClaim(ctx, organization.Name, due.ID, firstToken); err != nil {
+		t.Fatalf("ReleaseRoundClaim: %v", err)
+	}
+	reclaimed := claimRoundForIntegration(t, ctx, repository, base, due.ID)
+	if reclaimed.ClaimToken == firstToken {
+		t.Fatalf("reclaimed token = %q, want a new owner", reclaimed.ClaimToken)
+	}
+	if err := repository.ReleaseRoundClaim(ctx, organization.Name, due.ID, firstToken); !domain.IsConflict(err) {
+		t.Fatalf("stale ReleaseRoundClaim = %v, want conflict", err)
+	}
+	if err := repository.PersistPairings(ctx, organization.Name, due.ID, firstToken, nil); !domain.IsConflict(err) {
+		t.Fatalf("stale PersistPairings = %v, want conflict", err)
+	}
+	beforeRejectedDelete, err := repository.ListRounds(ctx, organization.Name)
+	if err != nil {
+		t.Fatalf("ListRounds before claimed compaction: %v", err)
+	}
+	if err := repository.DeleteRound(ctx, organization.Name, 2); !domain.IsConflict(err) {
+		t.Fatalf("DeleteRound across active claim = %v, want conflict", err)
+	}
+	afterRejectedDelete, err := repository.ListRounds(ctx, organization.Name)
+	if err != nil || !sameRoundIDs(beforeRejectedDelete, afterRejectedDelete) {
+		t.Fatalf("round IDs changed after rejected deletion: before=%#v after=%#v err=%v", beforeRejectedDelete, afterRejectedDelete, err)
+	}
+	if err := repository.ReleaseRoundClaim(ctx, organization.Name, due.ID, reclaimed.ClaimToken); err != nil {
+		t.Fatalf("release reclaimed round: %v", err)
+	}
+
+	rollbackRound, _ := repository.AddRound(ctx, organization.Name, base.Add(-2*time.Hour))
+	rollbackClaim := claimRoundForIntegration(t, ctx, repository, base, rollbackRound.ID)
+	if _, err := db.ExecContext(ctx, `
+		CREATE FUNCTION mealbot_test_fail_history() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'injected history failure'; END $$;
+		CREATE TRIGGER mealbot_test_fail_history BEFORE UPDATE OF last_round_with ON members
+		FOR EACH ROW EXECUTE FUNCTION mealbot_test_fail_history()`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+	if err := repository.PersistPairings(ctx, organization.Name, rollbackRound.ID, rollbackClaim.ClaimToken, []domain.Pair{pairAB}); err == nil {
+		t.Fatal("PersistPairings succeeded despite injected SQL error")
+	}
+	if _, err := db.ExecContext(ctx, `DROP TRIGGER mealbot_test_fail_history ON members; DROP FUNCTION mealbot_test_fail_history()`); err != nil {
+		t.Fatalf("drop failure trigger: %v", err)
+	}
+	var pairCount int
+	var done bool
+	if err := db.QueryRowContext(ctx, `
+		SELECT (SELECT COUNT(*) FROM pairs WHERE organization=$1 AND round=$2),
+		       (SELECT done FROM rounds WHERE organization=$1 AND id=$2)`,
+		organization.Name, rollbackRound.ID).Scan(&pairCount, &done); err != nil {
+		t.Fatalf("read rollback state: %v", err)
+	}
+	if pairCount != 0 || done {
+		t.Fatalf("failed pairing partially committed: pairs=%d done=%v", pairCount, done)
+	}
+	if err := repository.ReleaseRoundClaim(ctx, organization.Name, rollbackRound.ID, rollbackClaim.ClaimToken); err != nil {
+		t.Fatalf("release rollback test claim: %v", err)
+	}
+
+	if _, err := db.ExecContext(ctx, `ALTER TABLE pairs DROP CONSTRAINT pairs_id2_fkey`); err != nil {
+		t.Fatalf("drop member constraint for corruption test: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE rounds SET done = true WHERE organization = $1 AND id = $2`,
+		organization.Name, rollbackRound.ID); err != nil {
+		t.Fatalf("complete corrupt historical round: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO pairs (organization, round, id1, id2) VALUES ($1, $2, $3, $4)`,
+		organization.Name, rollbackRound.ID, memberA.Email, "missing@example.test"); err != nil {
+		t.Fatalf("insert corrupt historical pair: %v", err)
+	}
+	if _, err := repository.ListHistoricalPairs(ctx, organization.Name); !domain.IsIntegrity(err) {
+		t.Fatalf("missing historical member error = %v, want integrity", err)
+	}
+}
+
+func TestMigrationFailureRollsBackBeforeRetry(t *testing.T) {
+	if os.Getenv("RUN_POSTGRES_INTEGRATION") != "1" {
+		t.Skip("set RUN_POSTGRES_INTEGRATION=1 with a disposable DATABASE_URL")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if _, err := postgrestest.ValidateDatabaseURL(databaseURL); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	db, err := sql.Open(driverName, databaseURL)
+	if err != nil {
+		t.Fatalf("sql.Open migration rollback database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close migration rollback database: %v", err)
+		}
+	})
+	postgrestest.AcquireSuiteLock(t, ctx, db)
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatalf("migration rollback database ping: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, resetSQL); err != nil {
+		t.Fatalf("reset migration rollback database: %v", err)
+	}
+
+	repository, err := New(db)
+	if err != nil {
+		t.Fatalf("New migration rollback repository: %v", err)
+	}
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatalf("establish migration rollback schema: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO organizations (name, admin) VALUES ('migration-rollback', 'admin@example.test');
+		INSERT INTO members (organization, email, name) VALUES
+			('migration-rollback', 'a@example.test', 'Alpha'),
+			('migration-rollback', 'b@example.test', 'Beta');
+		INSERT INTO rounds (organization, id, scheduled_date, done)
+		VALUES ('migration-rollback', 0, '2026-11-25 10:00:00+00', true);
+		INSERT INTO pairs (organization, round, id1, id2)
+		VALUES ('migration-rollback', 0, 'a@example.test', 'b@example.test');
+		DELETE FROM mealbot_schema_migrations WHERE version = 3`); err != nil {
+		t.Fatalf("prepare migration rollback fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE FUNCTION mealbot_test_fail_pair_reinsert() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'injected migration pair reinsert failure'; END $$;
+		CREATE TRIGGER mealbot_test_fail_pair_reinsert BEFORE INSERT ON pairs
+		FOR EACH ROW EXECUTE FUNCTION mealbot_test_fail_pair_reinsert()`); err != nil {
+		t.Fatalf("create migration failure trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := db.ExecContext(cleanupContext, `
+			DROP TRIGGER IF EXISTS mealbot_test_fail_pair_reinsert ON pairs;
+			DROP FUNCTION IF EXISTS mealbot_test_fail_pair_reinsert()`); err != nil {
+			t.Errorf("clean up migration failure trigger: %v", err)
+		}
+	})
+
+	err = repository.Migrate(ctx)
+	if err == nil || !strings.Contains(err.Error(), "apply migration 003_constraints_and_indexes.sql") {
+		t.Fatalf("Migrate with injected failure = %v, want 003_constraints_and_indexes.sql application error", err)
+	}
+
+	var pairCount int
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM pairs
+		WHERE organization = 'migration-rollback' AND round = 0
+		  AND id1 = 'a@example.test' AND id2 = 'b@example.test' AND extra_id IS NULL`,
+	).Scan(&pairCount); err != nil {
+		t.Fatalf("read pair after failed migration: %v", err)
+	}
+	var primaryKeyExists bool
+	if err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_constraint
+			WHERE conname = 'pairs_pkey' AND conrelid = 'pairs'::regclass
+		)`,
+	).Scan(&primaryKeyExists); err != nil {
+		t.Fatalf("read pair primary key after failed migration: %v", err)
+	}
+	var failedLedgerCount int
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM mealbot_schema_migrations WHERE version = 3",
+	).Scan(&failedLedgerCount); err != nil {
+		t.Fatalf("read ledger after failed migration: %v", err)
+	}
+	if pairCount != 1 || !primaryKeyExists || failedLedgerCount != 0 {
+		t.Fatalf("failed migration partially committed: pairs=%d pairs_pkey=%v version_3_rows=%d",
+			pairCount, primaryKeyExists, failedLedgerCount)
+	}
+
+	if _, err := db.ExecContext(ctx, `
+		DROP TRIGGER mealbot_test_fail_pair_reinsert ON pairs;
+		DROP FUNCTION mealbot_test_fail_pair_reinsert()`); err != nil {
+		t.Fatalf("drop migration failure trigger: %v", err)
+	}
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatalf("retry Migrate after injected failure: %v", err)
+	}
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM mealbot_schema_migrations WHERE version = 3",
+	).Scan(&failedLedgerCount); err != nil {
+		t.Fatalf("read ledger after migration retry: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM pairs
+		WHERE organization = 'migration-rollback' AND round = 0
+		  AND id1 = 'a@example.test' AND id2 = 'b@example.test' AND extra_id IS NULL`,
+	).Scan(&pairCount); err != nil {
+		t.Fatalf("read pair after migration retry: %v", err)
+	}
+	if failedLedgerCount != 1 || pairCount != 1 {
+		t.Fatalf("migration retry state: version_3_rows=%d pairs=%d; want 1, 1", failedLedgerCount, pairCount)
+	}
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatalf("idempotent Migrate after retry: %v", err)
+	}
+}
+
+func TestLegacyPairCountsMigration(t *testing.T) {
+	if os.Getenv("RUN_POSTGRES_INTEGRATION") != "1" {
+		t.Skip("set RUN_POSTGRES_INTEGRATION=1 with a disposable DATABASE_URL")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if _, err := postgrestest.ValidateDatabaseURL(databaseURL); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	db, err := sql.Open(driverName, databaseURL)
+	if err != nil {
+		t.Fatalf("sql.Open legacy migration database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close legacy migration database: %v", err)
+		}
+	})
+	postgrestest.AcquireSuiteLock(t, ctx, db)
+	if _, err := db.ExecContext(ctx, resetSQL); err != nil {
+		t.Fatalf("reset legacy migration database: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE organizations (name text PRIMARY KEY, admin text NOT NULL, cross_match_trait text);
+		CREATE TABLE members (organization text, email text, name text, metadata jsonb,
+			pair_counts jsonb NOT NULL, active boolean NOT NULL, PRIMARY KEY (organization,email));
+		CREATE TABLE rounds (organization text, id integer, scheduled_date timestamp, done boolean,
+			PRIMARY KEY (organization,id));
+		CREATE TABLE pairs (organization text, id1 text, id2 text, extraId text NOT NULL,
+			round integer, PRIMARY KEY (organization,id1,id2,extraId,round));
+		INSERT INTO organizations VALUES ('legacy', 'admin', NULL);
+		INSERT INTO members VALUES ('legacy','a@example.test','A','{"team":"red"}',
+			'{"b@example.test":2}',true),
+			('legacy','b@example.test','B','{}','{}',true),
+			('legacy','c@example.test','C','{}','{}',true);
+		INSERT INTO rounds VALUES ('legacy', 0, '2026-11-25 10:00:00', true);
+		INSERT INTO pairs VALUES
+			('legacy','b@example.test','c@example.test','a@example.test',0),
+			('legacy','a@example.test','c@example.test','b@example.test',0),
+			('legacy','a@example.test','b@example.test','c@example.test',0)`); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	repository, _ := New(db)
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatalf("migrate legacy schema: %v", err)
+	}
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatalf("idempotent legacy migration: %v", err)
+	}
+	members, err := repository.ListMembers(ctx, "legacy", false)
+	if err != nil || len(members) != 3 || members[0].LastRoundWith["b@example.test"] != 2 || members[0].Metadata["team"] != "red" {
+		t.Fatalf("legacy member after migration = %#v, %v", members, err)
+	}
+
+	var id1, id2 string
+	var extraID sql.NullString
+	var retained int
+	if err := db.QueryRowContext(ctx, `
+		SELECT MIN(id1), MIN(id2), MIN(extra_id), COUNT(*)
+		FROM pairs WHERE organization = 'legacy' AND round = 0`,
+	).Scan(&id1, &id2, &extraID, &retained); err != nil {
+		t.Fatalf("read canonicalized legacy triple: %v", err)
+	}
+	if retained != 1 || id1 != "a@example.test" || id2 != "b@example.test" ||
+		!extraID.Valid || extraID.String != "c@example.test" {
+		t.Fatalf("canonicalized legacy triple = (%q,%q,%q) count %d", id1, id2, extraID.String, retained)
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE pairs SET id1 = 'b@example.test', id2 = 'c@example.test', extra_id = 'a@example.test'
+		WHERE organization = 'legacy' AND round = 0`); err == nil {
+		t.Fatal("canonical order constraint accepted a non-canonical legacy triple")
+	}
+	historical, err := repository.ListHistoricalPairs(ctx, "legacy")
+	if err != nil || len(historical) != 1 || len(historical[0].Pairs) != 1 || historical[0].Pairs[0].ExtraMember == nil {
+		t.Fatalf("canonicalized legacy history = %#v, %v", historical, err)
+	}
+	if err := repository.ReconstructOrganizationHistory(ctx, "legacy"); err != nil {
+		t.Fatalf("reconstruct canonicalized legacy history: %v", err)
+	}
+	members, err = repository.ListMembers(ctx, "legacy", false)
+	if err != nil {
+		t.Fatalf("read reconstructed legacy members: %v", err)
+	}
+	assertSymmetricRound(t, members, "a@example.test", "b@example.test", 0)
+	assertSymmetricRound(t, members, "a@example.test", "c@example.test", 0)
+	assertSymmetricRound(t, members, "b@example.test", "c@example.test", 0)
+}
+
+func integrationMember(t *testing.T, organization, email, name string, metadata map[string]string) domain.Member {
+	t.Helper()
+	member, err := domain.NewMember(organization, email, name, metadata, nil)
+	if err != nil {
+		t.Fatalf("NewMember(%q): %v", email, err)
+	}
+	return member
+}
+
+func assertMemberState(t *testing.T, members []domain.Member, email string, active bool, name string) {
+	t.Helper()
+	for _, member := range members {
+		if member.Email == email {
+			if member.Active != active || member.Name != name {
+				t.Fatalf("member %s = active %v name %q", email, member.Active, member.Name)
+			}
+			return
+		}
+	}
+	t.Fatalf("member %s not found", email)
+}
+
+func assertSymmetricRound(t *testing.T, members []domain.Member, left, right string, round int) {
+	t.Helper()
+	values := map[string]domain.Member{}
+	for _, member := range members {
+		values[member.Email] = member
+	}
+	if values[left].LastRoundWith[right] != round || values[right].LastRoundWith[left] != round {
+		t.Fatalf("history %s/%s is not symmetric at round %d: %#v", left, right, round, values)
+	}
+}
+
+func claimRoundForIntegration(t *testing.T, ctx context.Context, repository *Repository, now time.Time, roundID int) domain.Round {
+	t.Helper()
+	claimed, err := repository.ClaimDueRounds(ctx, now, now.Add(-15*time.Minute), 1)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != roundID || claimed[0].ClaimToken == "" {
+		t.Fatalf("claim round %d = %#v, %v", roundID, claimed, err)
+	}
+	return claimed[0]
+}
+
+func sameRoundIDs(left, right []domain.Round) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].ID != right[index].ID {
+			return false
+		}
+	}
+	return true
+}
+
+func TestIntegrationErrorClassificationContract(t *testing.T) {
+	if !errors.Is(domain.NewIntegrityError("test", "test", nil), domain.ErrIntegrity) {
+		t.Fatal("domain integrity error contract changed")
+	}
+}

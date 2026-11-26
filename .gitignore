@@ -1,0 +1,23 @@
+# Go build and test artifacts.
+/mealbot
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+
+# Local Go workspace files.
+go.work
+go.work.sum
+
+# Python functional-test artifacts.
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
