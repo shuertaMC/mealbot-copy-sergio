@@ -45,6 +45,9 @@ func TestPairHistoryMapsResolvedInactivePairsAndTriples(t *testing.T) {
 	if repository.calls != 1 || repository.organization != "o" {
 		t.Fatalf("ListHistoricalPairs calls = %d, organization = %q", repository.calls, repository.organization)
 	}
+	if got := result.RoundPairs[1][0].Member1; got.Organization != "" || got.Metadata != nil || got.LastRoundWith != nil || got.Email != "a@x" {
+		t.Fatalf("pair member = %#v; want only email and name populated", got)
+	}
 
 	injected := domain.NewIntegrityError("pair history", "injected dangling reference", nil)
 	repository.err = injected

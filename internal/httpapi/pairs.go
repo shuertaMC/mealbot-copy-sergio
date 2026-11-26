@@ -28,7 +28,9 @@ func NewPairHistoryService(repository PairHistoryRepository) *PairHistoryService
 	return &PairHistoryService{repository: repository}
 }
 
-// PairMemberResponse preserves the legacy pair-history member JSON shape.
+// PairMemberResponse preserves the legacy pair-history member JSON shape. Only
+// email and name are populated; the remaining fields serialize as legacy
+// zero values.
 type PairMemberResponse struct {
 	Organization  string
 	Email         string `json:"email"`
@@ -99,5 +101,5 @@ func NewPairsHandler(service PairHistoryUseCases, logger *slog.Logger) http.Hand
 }
 
 func pairMember(member domain.Member) PairMemberResponse {
-	return PairMemberResponse{Organization: member.Organization, Email: member.Email, Name: member.Name, Metadata: member.Metadata, LastRoundWith: member.LastRoundWith}
+	return PairMemberResponse{Email: member.Email, Name: member.Name}
 }
