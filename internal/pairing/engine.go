@@ -297,17 +297,20 @@ func selectPartner(members MembersMap, memberID string, candidates []string, rou
 		}
 		buckets[bucket] = append(buckets[bucket], candidateID)
 	}
-	for bucket, options := range buckets {
+	selectedBucket := len(buckets) - 1
+	for bucket, options := range buckets[:len(buckets)-1] {
 		if len(options) == 0 {
 			continue
 		}
-		index, err := selectIndex(randomInt, len(options))
-		if err != nil {
-			return "", false, err
-		}
-		return options[index], bucket >= 2, nil
+		selectedBucket = bucket
+		break
 	}
-	return "", false, fmt.Errorf("%w: member %q has no candidate bucket", ErrInvalidMembers, memberID)
+	options := buckets[selectedBucket]
+	index, err := selectIndex(randomInt, len(options))
+	if err != nil {
+		return "", false, err
+	}
+	return options[index], selectedBucket >= 2, nil
 }
 
 func selectTripleGroup(members MembersMap, pairs []Pair, extraID string, roundNumber int, randomInt RandomIntGenerator) (int, int, error) {
@@ -342,17 +345,19 @@ func selectTripleGroup(members MembersMap, pairs []Pair, extraID string, roundNu
 		}
 		buckets[bucket] = append(buckets[bucket], option{index: index, recent: recent})
 	}
-	for _, options := range buckets {
-		if len(options) == 0 {
+	options := buckets[len(buckets)-1]
+	for _, bucketOptions := range buckets[:len(buckets)-1] {
+		if len(bucketOptions) == 0 {
 			continue
 		}
-		selected, err := selectIndex(randomInt, len(options))
-		if err != nil {
-			return 0, 0, err
-		}
-		return options[selected].index, options[selected].recent, nil
+		options = bucketOptions
+		break
 	}
-	return 0, 0, fmt.Errorf("%w: triple has no candidate group", ErrInvalidMembers)
+	selected, err := selectIndex(randomInt, len(options))
+	if err != nil {
+		return 0, 0, err
+	}
+	return options[selected].index, options[selected].recent, nil
 }
 
 func wasRecent(lastRound, currentRound int) bool {
