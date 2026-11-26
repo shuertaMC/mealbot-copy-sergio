@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -283,6 +284,131 @@ func TestPostgresRepositoryIntegration(t *testing.T) {
 	}
 	if _, err := repository.ListHistoricalPairs(ctx, organization.Name); !domain.IsIntegrity(err) {
 		t.Fatalf("missing historical member error = %v, want integrity", err)
+	}
+}
+
+func TestMigrationFailureRollsBackBeforeRetry(t *testing.T) {
+	if os.Getenv("RUN_POSTGRES_INTEGRATION") != "1" {
+		t.Skip("set RUN_POSTGRES_INTEGRATION=1 with a disposable DATABASE_URL")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if _, err := postgrestest.ValidateDatabaseURL(databaseURL); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	db, err := sql.Open(driverName, databaseURL)
+	if err != nil {
+		t.Fatalf("sql.Open migration rollback database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close migration rollback database: %v", err)
+		}
+	})
+	postgrestest.AcquireSuiteLock(t, ctx, db)
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatalf("migration rollback database ping: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, resetSQL); err != nil {
+		t.Fatalf("reset migration rollback database: %v", err)
+	}
+
+	repository, err := New(db)
+	if err != nil {
+		t.Fatalf("New migration rollback repository: %v", err)
+	}
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatalf("establish migration rollback schema: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO organizations (name, admin) VALUES ('migration-rollback', 'admin@example.test');
+		INSERT INTO members (organization, email, name) VALUES
+			('migration-rollback', 'a@example.test', 'Alpha'),
+			('migration-rollback', 'b@example.test', 'Beta');
+		INSERT INTO rounds (organization, id, scheduled_date, done)
+		VALUES ('migration-rollback', 0, '2026-11-25 10:00:00+00', true);
+		INSERT INTO pairs (organization, round, id1, id2)
+		VALUES ('migration-rollback', 0, 'a@example.test', 'b@example.test');
+		DELETE FROM mealbot_schema_migrations WHERE version = 3`); err != nil {
+		t.Fatalf("prepare migration rollback fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		CREATE FUNCTION mealbot_test_fail_pair_reinsert() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'injected migration pair reinsert failure'; END $$;
+		CREATE TRIGGER mealbot_test_fail_pair_reinsert BEFORE INSERT ON pairs
+		FOR EACH ROW EXECUTE FUNCTION mealbot_test_fail_pair_reinsert()`); err != nil {
+		t.Fatalf("create migration failure trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := db.ExecContext(cleanupContext, `
+			DROP TRIGGER IF EXISTS mealbot_test_fail_pair_reinsert ON pairs;
+			DROP FUNCTION IF EXISTS mealbot_test_fail_pair_reinsert()`); err != nil {
+			t.Errorf("clean up migration failure trigger: %v", err)
+		}
+	})
+
+	err = repository.Migrate(ctx)
+	if err == nil || !strings.Contains(err.Error(), "apply migration 003_constraints_and_indexes.sql") {
+		t.Fatalf("Migrate with injected failure = %v, want 003_constraints_and_indexes.sql application error", err)
+	}
+
+	var pairCount int
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM pairs
+		WHERE organization = 'migration-rollback' AND round = 0
+		  AND id1 = 'a@example.test' AND id2 = 'b@example.test' AND extra_id IS NULL`,
+	).Scan(&pairCount); err != nil {
+		t.Fatalf("read pair after failed migration: %v", err)
+	}
+	var primaryKeyExists bool
+	if err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_constraint
+			WHERE conname = 'pairs_pkey' AND conrelid = 'pairs'::regclass
+		)`,
+	).Scan(&primaryKeyExists); err != nil {
+		t.Fatalf("read pair primary key after failed migration: %v", err)
+	}
+	var failedLedgerCount int
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM mealbot_schema_migrations WHERE version = 3",
+	).Scan(&failedLedgerCount); err != nil {
+		t.Fatalf("read ledger after failed migration: %v", err)
+	}
+	if pairCount != 1 || !primaryKeyExists || failedLedgerCount != 0 {
+		t.Fatalf("failed migration partially committed: pairs=%d pairs_pkey=%v version_3_rows=%d",
+			pairCount, primaryKeyExists, failedLedgerCount)
+	}
+
+	if _, err := db.ExecContext(ctx, `
+		DROP TRIGGER mealbot_test_fail_pair_reinsert ON pairs;
+		DROP FUNCTION mealbot_test_fail_pair_reinsert()`); err != nil {
+		t.Fatalf("drop migration failure trigger: %v", err)
+	}
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatalf("retry Migrate after injected failure: %v", err)
+	}
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM mealbot_schema_migrations WHERE version = 3",
+	).Scan(&failedLedgerCount); err != nil {
+		t.Fatalf("read ledger after migration retry: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM pairs
+		WHERE organization = 'migration-rollback' AND round = 0
+		  AND id1 = 'a@example.test' AND id2 = 'b@example.test' AND extra_id IS NULL`,
+	).Scan(&pairCount); err != nil {
+		t.Fatalf("read pair after migration retry: %v", err)
+	}
+	if failedLedgerCount != 1 || pairCount != 1 {
+		t.Fatalf("migration retry state: version_3_rows=%d pairs=%d; want 1, 1", failedLedgerCount, pairCount)
+	}
+	if err := repository.Migrate(ctx); err != nil {
+		t.Fatalf("idempotent Migrate after retry: %v", err)
 	}
 }
 
