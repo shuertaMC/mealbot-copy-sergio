@@ -11,8 +11,6 @@ import (
 	"github.com/johnamadeo/mealbot/internal/domain"
 )
 
-const defaultClaimLease = 15 * time.Minute
-
 // ListRounds returns an organization's rounds ordered by ID.
 func (r *Repository) ListRounds(ctx context.Context, organization string) ([]domain.Round, error) {
 	organization = strings.TrimSpace(organization)
@@ -227,12 +225,6 @@ func (r *Repository) ClaimDueRounds(ctx context.Context, now, staleBefore time.T
 		return rounds[i].ScheduledAt.Before(rounds[j].ScheduledAt)
 	})
 	return rounds, nil
-}
-
-// FindDueRounds leases due rounds with the default retry interval. The cutoff
-// is supplied by the caller's clock to keep scheduler behavior deterministic.
-func (r *Repository) FindDueRounds(ctx context.Context, cutoff time.Time) ([]domain.Round, error) {
-	return r.ClaimDueRounds(ctx, cutoff, cutoff.Add(-defaultClaimLease), 100)
 }
 
 // ReleaseRoundClaim makes a failed unfinished round immediately eligible for

@@ -550,18 +550,6 @@ func TestOpenWithChecksPool(t *testing.T) {
 	}
 }
 
-func TestFindDueRoundsUsesCallerClock(t *testing.T) {
-	t.Parallel()
-	repository, mock := mockRepository(t)
-	cutoff := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
-	mock.ExpectQuery(`(?s)WITH due AS.*SET processing_started_at = \$1, processing_token = gen_random_uuid\(\)::text.*RETURNING.*processing_token`).WithArgs(cutoff, cutoff.Add(-defaultClaimLease), 100).
-		WillReturnRows(sqlmock.NewRows([]string{"organization", "id", "scheduled_date", "done", "processing_token"}))
-	rounds, err := repository.FindDueRounds(context.Background(), cutoff)
-	if err != nil || len(rounds) != 0 {
-		t.Fatalf("FindDueRounds = %#v, %v", rounds, err)
-	}
-}
-
 func TestCompletedPairingRollsBack(t *testing.T) {
 	t.Parallel()
 	repository, mock := mockRepository(t)
