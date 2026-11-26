@@ -46,8 +46,8 @@ func NewOrganizationService(repository OrganizationRepository) *OrganizationServ
 // deterministic lexical order.
 func (s *OrganizationService) ListOrganizationNames(ctx context.Context, admin string) ([]string, error) {
 	admin = strings.TrimSpace(admin)
-	if admin == "" {
-		return nil, domain.NewValidationError("organization.admin", "must not be empty")
+	if err := domain.RequireNonEmpty("organization.admin", admin); err != nil {
+		return nil, err
 	}
 	organizations, err := s.repository.ListOrganizations(ctx, admin)
 	if err != nil {
@@ -73,8 +73,8 @@ func (s *OrganizationService) Create(ctx context.Context, name, admin string) er
 // SetCrossMatchTrait sets a trait, or clears it when trait is nil or empty.
 func (s *OrganizationService) SetCrossMatchTrait(ctx context.Context, organization string, trait *string) error {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return domain.NewValidationError("organization.name", "must not be empty")
+	if err := domain.RequireNonEmpty("organization.name", organization); err != nil {
+		return err
 	}
 	if trait != nil && *trait == "" {
 		trait = nil

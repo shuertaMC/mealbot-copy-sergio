@@ -46,8 +46,8 @@ func NewRoundService(repository RoundRepository) *RoundService {
 // List returns ordered timestamps in the legacy UTC second-resolution shape.
 func (s *RoundService) List(ctx context.Context, organization string) ([]string, error) {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return nil, domain.NewValidationError("round.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("round.organization", organization); err != nil {
+		return nil, err
 	}
 	rounds, err := s.repository.ListRounds(ctx, organization)
 	if err != nil {
@@ -63,8 +63,8 @@ func (s *RoundService) List(ctx context.Context, organization string) ([]string,
 // Add parses a supported timestamp and schedules a new round.
 func (s *RoundService) Add(ctx context.Context, organization, timestamp string) error {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return domain.NewValidationError("round.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("round.organization", organization); err != nil {
+		return err
 	}
 	parsed, err := ParseRoundTimestamp(timestamp)
 	if err != nil {
@@ -77,11 +77,11 @@ func (s *RoundService) Add(ctx context.Context, organization, timestamp string) 
 // Reschedule parses a supported timestamp and updates a non-negative round ID.
 func (s *RoundService) Reschedule(ctx context.Context, organization string, roundID int, timestamp string) error {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return domain.NewValidationError("round.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("round.organization", organization); err != nil {
+		return err
 	}
-	if roundID < 0 {
-		return domain.NewValidationError("round.id", "must be non-negative")
+	if err := domain.RequireRoundID(roundID); err != nil {
+		return err
 	}
 	parsed, err := ParseRoundTimestamp(timestamp)
 	if err != nil {
@@ -93,11 +93,11 @@ func (s *RoundService) Reschedule(ctx context.Context, organization string, roun
 // Remove deletes and compacts a non-negative round ID.
 func (s *RoundService) Remove(ctx context.Context, organization string, roundID int) error {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return domain.NewValidationError("round.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("round.organization", organization); err != nil {
+		return err
 	}
-	if roundID < 0 {
-		return domain.NewValidationError("round.id", "must be non-negative")
+	if err := domain.RequireRoundID(roundID); err != nil {
+		return err
 	}
 	return s.repository.DeleteRound(ctx, organization, roundID)
 }

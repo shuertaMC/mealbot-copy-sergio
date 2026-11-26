@@ -56,8 +56,8 @@ type GetPairsResponse struct {
 // errors while mapping provider-neutral history to the legacy response shape.
 func (s *PairHistoryService) ListHistory(ctx context.Context, organization string) (GetPairsResponse, error) {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return GetPairsResponse{}, domain.NewValidationError("pair.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("pair.organization", organization); err != nil {
+		return GetPairsResponse{}, err
 	}
 	rounds, err := s.repository.ListHistoricalPairs(ctx, organization)
 	if err != nil {

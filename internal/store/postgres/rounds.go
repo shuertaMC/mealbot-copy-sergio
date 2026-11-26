@@ -14,8 +14,8 @@ import (
 // ListRounds returns an organization's rounds ordered by ID.
 func (r *Repository) ListRounds(ctx context.Context, organization string) ([]domain.Round, error) {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return nil, domain.NewValidationError("round.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("round.organization", organization); err != nil {
+		return nil, err
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT organization, id, scheduled_date, done
@@ -31,8 +31,8 @@ func (r *Repository) ListRounds(ctx context.Context, organization string) ([]dom
 // nullable aggregate, so the first round is ID zero.
 func (r *Repository) AddRound(ctx context.Context, organization string, scheduledAt time.Time) (domain.Round, error) {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return domain.Round{}, domain.NewValidationError("round.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("round.organization", organization); err != nil {
+		return domain.Round{}, err
 	}
 	if scheduledAt.IsZero() {
 		return domain.Round{}, domain.NewValidationError("round.scheduledAt", "must be set")
@@ -68,11 +68,11 @@ func (r *Repository) AddRound(ctx context.Context, organization string, schedule
 // RescheduleRound changes a scheduled time and clears any scheduler claim.
 func (r *Repository) RescheduleRound(ctx context.Context, organization string, roundID int, scheduledAt time.Time) error {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return domain.NewValidationError("round.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("round.organization", organization); err != nil {
+		return err
 	}
-	if roundID < 0 {
-		return domain.NewValidationError("round.id", "must be non-negative")
+	if err := domain.RequireRoundID(roundID); err != nil {
+		return err
 	}
 	if scheduledAt.IsZero() {
 		return domain.NewValidationError("round.scheduledAt", "must be set")
@@ -90,11 +90,11 @@ func (r *Repository) RescheduleRound(ctx context.Context, organization string, r
 // and cascading pair ID, then rebuilds member histories in one transaction.
 func (r *Repository) DeleteRound(ctx context.Context, organization string, roundID int) error {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return domain.NewValidationError("round.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("round.organization", organization); err != nil {
+		return err
 	}
-	if roundID < 0 {
-		return domain.NewValidationError("round.id", "must be non-negative")
+	if err := domain.RequireRoundID(roundID); err != nil {
+		return err
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -232,14 +232,14 @@ func (r *Repository) ClaimDueRounds(ctx context.Context, now, staleBefore time.T
 // are never reopened.
 func (r *Repository) ReleaseRoundClaim(ctx context.Context, organization string, roundID int, claimToken string) error {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return domain.NewValidationError("round.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("round.organization", organization); err != nil {
+		return err
 	}
-	if roundID < 0 {
-		return domain.NewValidationError("round.id", "must be non-negative")
+	if err := domain.RequireRoundID(roundID); err != nil {
+		return err
 	}
-	if strings.TrimSpace(claimToken) == "" {
-		return domain.NewValidationError("round.claimToken", "must not be empty")
+	if err := domain.RequireNonEmpty("round.claimToken", claimToken); err != nil {
+		return err
 	}
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE rounds SET processing_started_at = NULL, processing_token = NULL

@@ -15,8 +15,8 @@ import (
 // false, inactive historical members are included.
 func (r *Repository) ListMembers(ctx context.Context, organization string, activeOnly bool) ([]domain.Member, error) {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return nil, domain.NewValidationError("member.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("member.organization", organization); err != nil {
+		return nil, err
 	}
 	query := `SELECT organization, email, name, metadata, active, last_round_with
 		FROM members WHERE organization = $1`
@@ -37,8 +37,8 @@ func (r *Repository) ListMembers(ctx context.Context, organization string, activ
 // members are deactivated, and every known relationship is made symmetric.
 func (r *Repository) ReconcileMembers(ctx context.Context, organization string, imported []domain.Member) ([]domain.Member, error) {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return nil, domain.NewValidationError("member.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("member.organization", organization); err != nil {
+		return nil, err
 	}
 	if len(imported) == 0 {
 		return nil, domain.NewValidationError("members", "must not be empty")

@@ -11,8 +11,8 @@ import (
 // ListOrganizations returns organizations administered by admin in name order.
 func (r *Repository) ListOrganizations(ctx context.Context, admin string) ([]domain.Organization, error) {
 	admin = strings.TrimSpace(admin)
-	if admin == "" {
-		return nil, domain.NewValidationError("organization.admin", "must not be empty")
+	if err := domain.RequireNonEmpty("organization.admin", admin); err != nil {
+		return nil, err
 	}
 	return r.queryOrganizations(ctx, "list organizations", `
 		SELECT name, admin, cross_match_trait
@@ -64,8 +64,8 @@ func (r *Repository) CreateOrganization(ctx context.Context, organization domain
 // pointer distinguishes an unset trait from a missing organization.
 func (r *Repository) CrossMatchTrait(ctx context.Context, organization string) (*string, error) {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return nil, domain.NewValidationError("organization.name", "must not be empty")
+	if err := domain.RequireNonEmpty("organization.name", organization); err != nil {
+		return nil, err
 	}
 	var trait sql.NullString
 	if err := r.db.QueryRowContext(ctx,
@@ -86,8 +86,8 @@ func (r *Repository) CrossMatchTrait(ctx context.Context, organization string) (
 // UpdateCrossMatchTrait sets or clears an organization's configured trait.
 func (r *Repository) UpdateCrossMatchTrait(ctx context.Context, organization string, trait *string) error {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return domain.NewValidationError("organization.name", "must not be empty")
+	if err := domain.RequireNonEmpty("organization.name", organization); err != nil {
+		return err
 	}
 	if trait != nil && *trait == "" {
 		trait = nil

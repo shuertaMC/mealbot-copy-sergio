@@ -72,8 +72,8 @@ func NewMemberService(repository MemberRepository) *MemberService {
 // nullable configured cross-match trait.
 func (s *MemberService) Get(ctx context.Context, organization string) (GetMembersResponse, error) {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return GetMembersResponse{}, domain.NewValidationError("member.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("member.organization", organization); err != nil {
+		return GetMembersResponse{}, err
 	}
 	members, err := s.repository.ListMembers(ctx, organization, true)
 	if err != nil {
@@ -108,8 +108,8 @@ func (s *MemberService) Import(ctx context.Context, organization string, source 
 // normalized; name and email must each appear exactly once.
 func ParseMembersCSV(source io.Reader, organization string, maxBytes int64) ([]domain.Member, error) {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return nil, domain.NewValidationError("member.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("member.organization", organization); err != nil {
+		return nil, err
 	}
 	if source == nil {
 		return nil, domain.NewValidationError("members", "CSV source is required")

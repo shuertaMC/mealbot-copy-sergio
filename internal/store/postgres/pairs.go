@@ -12,8 +12,8 @@ import (
 // ListPairs returns stored member IDs grouped in ordered rounds.
 func (r *Repository) ListPairs(ctx context.Context, organization string) ([]domain.Round, error) {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return nil, domain.NewValidationError("pair.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("pair.organization", organization); err != nil {
+		return nil, err
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT r.organization, r.id, r.scheduled_date, r.done,
@@ -112,14 +112,14 @@ func (r *Repository) ListHistoricalPairs(ctx context.Context, organization strin
 // conflict so scheduler retries cannot duplicate persistence.
 func (r *Repository) PersistPairings(ctx context.Context, organization string, roundID int, claimToken string, pairs []domain.Pair) error {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return domain.NewValidationError("pair.organization", "must not be empty")
+	if err := domain.RequireNonEmpty("pair.organization", organization); err != nil {
+		return err
 	}
-	if roundID < 0 {
-		return domain.NewValidationError("round.id", "must be non-negative")
+	if err := domain.RequireRoundID(roundID); err != nil {
+		return err
 	}
-	if strings.TrimSpace(claimToken) == "" {
-		return domain.NewValidationError("round.claimToken", "must not be empty")
+	if err := domain.RequireNonEmpty("round.claimToken", claimToken); err != nil {
+		return err
 	}
 	seenMembers := make(map[string]struct{})
 	seenPairs := make(map[domain.Pair]struct{})
@@ -243,8 +243,8 @@ func (r *Repository) ReconstructHistory(ctx context.Context) error {
 // histories from stored pairs and triples in one transaction.
 func (r *Repository) ReconstructOrganizationHistory(ctx context.Context, organization string) error {
 	organization = strings.TrimSpace(organization)
-	if organization == "" {
-		return domain.NewValidationError("organization.name", "must not be empty")
+	if err := domain.RequireNonEmpty("organization.name", organization); err != nil {
+		return err
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
