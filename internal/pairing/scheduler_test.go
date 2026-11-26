@@ -18,6 +18,14 @@ const (
 	testClaimLease = 15 * time.Minute
 )
 
+// schedulerTestNow is the fixed instant used wherever a test needs a clock that
+// does not depend on wall-clock time.
+var schedulerTestNow = time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+
+func fixedSchedulerClock() Clock {
+	return ClockFunc(func() time.Time { return schedulerTestNow })
+}
+
 func TestSchedulerClaimsDeliversThenPersists(t *testing.T) {
 	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.FixedZone("offset", 3600))
 	repository := &schedulerRepository{
@@ -61,7 +69,7 @@ func TestSchedulerZeroSingletonAndTriplePolicies(t *testing.T) {
 	for _, count := range []int{0, 1, 3} {
 		t.Run(string(rune('0'+count)), func(t *testing.T) {
 			repository := &schedulerRepository{
-				rounds:  []domain.Round{{Organization: "org", ID: 2, ScheduledAt: time.Now()}},
+				rounds:  []domain.Round{{Organization: "org", ID: 2, ScheduledAt: schedulerTestNow}},
 				members: domainMembers(t, count),
 			}
 			delivery := &recordingDelivery{}
@@ -127,12 +135,12 @@ func TestSchedulerFailureReleasesWithoutPersistence(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			repository := &schedulerRepository{
-				rounds:  []domain.Round{{Organization: "org", ID: 3, ScheduledAt: time.Now()}},
+				rounds:  []domain.Round{{Organization: "org", ID: 3, ScheduledAt: schedulerTestNow.Add(-time.Minute)}},
 				members: domainMembers(t, 4),
 			}
 			delivery := &recordingDelivery{}
 			test.configure(repository, delivery)
-			scheduler := mustScheduler(t, repository, delivery, ClockFunc(func() time.Time { return time.Now() }))
+			scheduler := mustScheduler(t, repository, delivery, fixedSchedulerClock())
 			err := scheduler.Run(context.Background())
 			if err == nil || (test.wantError != nil && !errors.Is(err, test.wantError)) {
 				t.Fatalf("Run error = %v, want %v", err, test.wantError)
@@ -198,18 +206,18 @@ func TestSchedulerFailureReleasesUnprocessedClaims(t *testing.T) {
 func TestSchedulerClaimAndReleaseErrors(t *testing.T) {
 	claimErr := errors.New("claim failed")
 	repository := &schedulerRepository{claimErr: claimErr}
-	scheduler := mustScheduler(t, repository, &recordingDelivery{}, ClockFunc(func() time.Time { return time.Now() }))
+	scheduler := mustScheduler(t, repository, &recordingDelivery{}, fixedSchedulerClock())
 	if err := scheduler.Run(context.Background()); !errors.Is(err, claimErr) {
 		t.Fatalf("claim error = %v", err)
 	}
 
 	repository = &schedulerRepository{
-		rounds:     []domain.Round{{Organization: "org", ID: 1, ScheduledAt: time.Now()}},
+		rounds:     []domain.Round{{Organization: "org", ID: 1, ScheduledAt: schedulerTestNow.Add(-time.Minute)}},
 		members:    domainMembers(t, 2),
 		releaseErr: errors.New("release failed"),
 	}
 	delivery := &recordingDelivery{failAt: 1, err: errors.New("delivery failed")}
-	scheduler = mustScheduler(t, repository, delivery, ClockFunc(func() time.Time { return time.Now() }))
+	scheduler = mustScheduler(t, repository, delivery, fixedSchedulerClock())
 	err := scheduler.Run(context.Background())
 	if !errors.Is(err, delivery.err) || !errors.Is(err, repository.releaseErr) {
 		t.Fatalf("joined error = %v", err)
@@ -223,7 +231,7 @@ func TestSchedulerValidationAndClock(t *testing.T) {
 	repository := &schedulerRepository{}
 	base := SchedulerConfig{
 		Members: repository, Traits: repository, Rounds: repository, Persistence: repository,
-		Delivery: &recordingDelivery{}, Clock: ClockFunc(func() time.Time { return time.Now() }),
+		Delivery: &recordingDelivery{}, Clock: fixedSchedulerClock(),
 		RandomInt: func(int) int { return 0 }, SMTPLogin: "bot@example.test",
 		ClaimLimit: testClaimLimit, ClaimLease: testClaimLease,
 	}
