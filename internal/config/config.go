@@ -18,6 +18,9 @@ const (
 	defaultRequestTimeout = 15 * time.Second
 	defaultJWKSTimeout    = 5 * time.Second
 	defaultMailTimeout    = 10 * time.Second
+	defaultAuth0Issuer    = "https://mealbot.auth0.com/"
+	defaultAuth0Audience  = "https://mealbot-2.herokuapp.com/"
+	defaultAuth0JWKSURL   = "https://mealbot.auth0.com/.well-known/jwks.json"
 )
 
 // Mode identifies the validation policy applied to a configuration.
@@ -93,10 +96,11 @@ type Config struct {
 }
 
 // New validates typed values and returns an immutable Config. It applies safe,
-// non-secret defaults for mode, port, static directory, and timeouts.
+// non-secret development defaults for scalar settings and Auth0.
 func New(values Values) (Config, error) {
 	values = withDefaults(values)
 	values = trimValues(values)
+	values = withDevelopmentAuth0Defaults(values)
 
 	if err := validateValues(values); err != nil {
 		return Config{}, err
@@ -262,6 +266,15 @@ func trimValues(values Values) Values {
 	return values
 }
 
+func withDevelopmentAuth0Defaults(values Values) Values {
+	if values.Mode == Development && values.Auth0Issuer == "" && values.Auth0Audience == "" && values.Auth0JWKSURL == "" {
+		values.Auth0Issuer = defaultAuth0Issuer
+		values.Auth0Audience = defaultAuth0Audience
+		values.Auth0JWKSURL = defaultAuth0JWKSURL
+	}
+	return values
+}
+
 func validateValues(values Values) error {
 	if values.Mode != Development && values.Mode != Production {
 		return fmt.Errorf("config: APP_ENV must be %q or %q", Development, Production)
@@ -300,7 +313,7 @@ func validateValues(values Values) error {
 	if values.Mode == Production {
 		return validateProduction(values)
 	}
-	return nil
+	return validateDevelopmentProviders(values)
 }
 
 func validateDatabase(values Values) error {
@@ -344,6 +357,28 @@ func validateProduction(values Values) error {
 		}
 	}
 	return nil
+}
+
+func validateDevelopmentProviders(values Values) error {
+	auth0Count := populatedCount(values.Auth0Issuer, values.Auth0Audience, values.Auth0JWKSURL)
+	if auth0Count != 3 {
+		return errors.New("config: AUTH0_ISSUER, AUTH0_AUDIENCE, and AUTH0_JWKS_URL must be set together")
+	}
+	mailgunCount := populatedCount(values.MailgunSMTPLogin, values.MailgunDomain, values.MailgunAPIKey)
+	if mailgunCount != 0 && mailgunCount != 3 {
+		return errors.New("config: MAILGUN_SMTP_LOGIN, MAILGUN_DOMAIN, and MAILGUN_API_KEY must be set together")
+	}
+	return nil
+}
+
+func populatedCount(values ...string) int {
+	count := 0
+	for _, value := range values {
+		if value != "" {
+			count++
+		}
+	}
+	return count
 }
 
 func validateHTTPURL(name, rawURL string) error {

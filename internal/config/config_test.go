@@ -24,8 +24,12 @@ func TestFromMapAppliesDevelopmentDefaults(t *testing.T) {
 	if got := configured.Database(); got != (Database{User: "local-user", Name: "local-name"}) {
 		t.Errorf("Database() = %#v", got)
 	}
-	if got := configured.Auth0(); got != (Auth0{}) {
-		t.Errorf("Auth0() = %#v, want zero value", got)
+	if got := configured.Auth0(); got != (Auth0{
+		Issuer:   "https://mealbot.auth0.com/",
+		Audience: "https://mealbot-2.herokuapp.com/",
+		JWKSURL:  "https://mealbot.auth0.com/.well-known/jwks.json",
+	}) {
+		t.Errorf("Auth0() = %#v", got)
 	}
 	if got := configured.Mailgun(); got != (Mailgun{}) {
 		t.Errorf("Mailgun() = %#v, want zero value", got)
@@ -44,6 +48,31 @@ func TestFromMapAppliesDevelopmentDefaults(t *testing.T) {
 	}
 	if configured.MailTimeout() != defaultMailTimeout {
 		t.Errorf("MailTimeout() = %v", configured.MailTimeout())
+	}
+}
+
+func TestFromMapAcceptsCompleteDevelopmentAuth0Override(t *testing.T) {
+	configured, err := FromMap(map[string]string{
+		"DB_USER":        "local-user",
+		"DB_NAME":        "local-name",
+		"AUTH0_ISSUER":   "https://tenant.example.test/",
+		"AUTH0_AUDIENCE": "https://api.example.test/",
+		"AUTH0_JWKS_URL": "https://tenant.example.test/.well-known/jwks.json",
+	})
+	if err != nil {
+		t.Fatalf("FromMap() error = %v", err)
+	}
+
+	want := Auth0{
+		Issuer:   "https://tenant.example.test/",
+		Audience: "https://api.example.test/",
+		JWKSURL:  "https://tenant.example.test/.well-known/jwks.json",
+	}
+	if got := configured.Auth0(); got != want {
+		t.Errorf("Auth0() = %#v, want %#v", got, want)
+	}
+	if got := configured.Mailgun(); got != (Mailgun{}) {
+		t.Errorf("Mailgun() = %#v, want zero value", got)
 	}
 }
 
@@ -196,6 +225,52 @@ func TestNewRejectsTypedValidationFailures(t *testing.T) {
 				t.Fatalf("New() error = %v, want containing %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestFromMapRejectsPartialProviderGroups(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []struct{ key, value string }
+		want    string
+	}{
+		{
+			name: "auth0",
+			entries: []struct{ key, value string }{
+				{"AUTH0_ISSUER", "https://tenant.example.test/"},
+				{"AUTH0_AUDIENCE", "https://api.example.test/"},
+				{"AUTH0_JWKS_URL", "https://tenant.example.test/.well-known/jwks.json"},
+			},
+			want: "AUTH0_ISSUER, AUTH0_AUDIENCE, and AUTH0_JWKS_URL must be set together",
+		},
+		{
+			name: "mailgun",
+			entries: []struct{ key, value string }{
+				{"MAILGUN_SMTP_LOGIN", "mail@example.test"},
+				{"MAILGUN_DOMAIN", "mg.example.test"},
+				{"MAILGUN_API_KEY", "test-key"},
+			},
+			want: "MAILGUN_SMTP_LOGIN, MAILGUN_DOMAIN, and MAILGUN_API_KEY must be set together",
+		},
+	}
+
+	for _, test := range tests {
+		for mask := 1; mask < (1<<len(test.entries))-1; mask++ {
+			values := map[string]string{"DB_USER": "local-user", "DB_NAME": "local-name"}
+			var supplied []string
+			for index, entry := range test.entries {
+				if mask&(1<<index) != 0 {
+					values[entry.key] = entry.value
+					supplied = append(supplied, entry.key)
+				}
+			}
+			t.Run(test.name+"/"+strings.Join(supplied, "+"), func(t *testing.T) {
+				_, err := FromMap(values)
+				if err == nil || !strings.Contains(err.Error(), test.want) {
+					t.Fatalf("FromMap() error = %v, want containing %q", err, test.want)
+				}
+			})
+		}
 	}
 }
 

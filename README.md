@@ -54,7 +54,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema.sql
 
 Never run `internal/store/postgres/testdata/reset.sql` against retained data. It drops application tables and exists only for disposable integration databases whose name contains `test`. Back up production data and test migrations on a copy before deployment.
 
-Development mode allows absent provider settings so configuration and static behavior can be tested with fakes, but real authenticated HTTP startup still requires valid Auth0 settings and `pair` requires valid Mailgun settings.
+Development mode uses the legacy non-secret Auth0 issuer, audience, and JWKS URL when all three Auth0 variables are absent. An Auth0 override must provide the complete three-variable group. Mailgun has no defaults: leave all three Mailgun variables absent when delivery is not needed, or provide all three together.
 
 ## Configuration
 
@@ -67,12 +67,12 @@ Configuration is read once at process startup. Durations use Go syntax such as `
 | `DATABASE_URL` | none | Absolute `postgres://` or `postgresql://` URL; mutually exclusive with local database fields. |
 | `DB_USER` | none | Local PostgreSQL role; required with `DB_NAME` when `DATABASE_URL` is absent. |
 | `DB_NAME` | none | Local PostgreSQL database; required with `DB_USER` when `DATABASE_URL` is absent. |
-| `AUTH0_ISSUER` | none | Absolute HTTP(S) JWT issuer URL, normally ending in `/`. |
-| `AUTH0_AUDIENCE` | none | Required JWT audience; string and array audience claims are accepted. |
-| `AUTH0_JWKS_URL` | none | Absolute HTTP(S) JWKS endpoint used for RS256 keys. |
-| `MAILGUN_SMTP_LOGIN` | none | Sender mailbox placed in the organization-derived `From` header. |
-| `MAILGUN_DOMAIN` | none | Mailgun sending domain. |
-| `MAILGUN_API_KEY` | none | Mailgun API secret. |
+| `AUTH0_ISSUER` | `https://mealbot.auth0.com/` in development | Absolute HTTP(S) JWT issuer URL. Set together with `AUTH0_AUDIENCE` and `AUTH0_JWKS_URL` when overriding the development group. |
+| `AUTH0_AUDIENCE` | `https://mealbot-2.herokuapp.com/` in development | Required JWT audience; string and array audience claims are accepted. Set together with the other Auth0 variables. |
+| `AUTH0_JWKS_URL` | `https://mealbot.auth0.com/.well-known/jwks.json` in development | Absolute HTTP(S) JWKS endpoint used for RS256 keys. Set together with the other Auth0 variables. |
+| `MAILGUN_SMTP_LOGIN` | none | Sender mailbox placed in the organization-derived `From` header. Set together with `MAILGUN_DOMAIN` and `MAILGUN_API_KEY`. |
+| `MAILGUN_DOMAIN` | none | Mailgun sending domain. Set together with the other Mailgun variables. |
+| `MAILGUN_API_KEY` | none | Mailgun API secret. Set together with the other Mailgun variables. |
 | `STATIC_DIR` | `static` | Existing directory served without authentication. |
 | `CORS_ALLOWED_ORIGINS` | empty | Comma-separated exact origins, for example `https://app.example`; no wildcard or path is allowed. |
 | `REQUEST_TIMEOUT` | `15s` | Inbound request plus server read/write timeout. |

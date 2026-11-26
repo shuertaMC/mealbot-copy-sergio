@@ -236,6 +236,36 @@ func TestExecuteFailuresAreSurfacedAndCloseOnce(t *testing.T) {
 	}
 }
 
+func TestExecuteRejectsPartialProviderConfigBeforeRepositorySetup(t *testing.T) {
+	repository := &fakeRepository{}
+	factories := testFactories(t, repository, &fakeScheduler{}, newFakeServer())
+	factories.LoadConfig = func() (config.Config, error) {
+		return config.FromMap(map[string]string{
+			"DB_USER":      "local-user",
+			"DB_NAME":      "local-name",
+			"AUTH0_ISSUER": "https://tenant.example.test/",
+		})
+	}
+	openCalls := 0
+	factories.OpenRepository = func(context.Context, config.Database) (Repository, error) {
+		openCalls++
+		return repository, nil
+	}
+	adapterCalls := 0
+	factories.NewAuthenticator = func(config.Auth0, time.Duration) (httpapi.Middleware, error) {
+		adapterCalls++
+		return func(handler http.Handler) http.Handler { return handler }, nil
+	}
+
+	err := Execute(context.Background(), nil, factories)
+	if err == nil || !strings.Contains(err.Error(), "AUTH0_ISSUER, AUTH0_AUDIENCE, and AUTH0_JWKS_URL must be set together") {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if openCalls != 0 || repository.migrations != 0 || adapterCalls != 0 {
+		t.Fatalf("startup side effects = opens %d, migrations %d, adapters %d", openCalls, repository.migrations, adapterCalls)
+	}
+}
+
 func TestComposedHTTPServerAuthenticatedOrganizationSmokeAndStatic(t *testing.T) {
 	repository := &fakeRepository{}
 	configuration := testConfig(t)
