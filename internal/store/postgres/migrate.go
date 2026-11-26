@@ -15,20 +15,12 @@ const migrationLockID int64 = 0x4d45414c424f54
 
 // Migrate applies every embedded forward migration exactly once. Each file and
 // its ledger entry execute in one transaction while an advisory transaction
-// lock serializes concurrent application instances.
+// lock serializes concurrent application instances, including creation of the
+// ledger table itself.
 func (r *Repository) Migrate(ctx context.Context) error {
 	if r == nil || r.db == nil {
 		return fmt.Errorf("postgres migrate: repository is closed")
 	}
-	if _, err := r.db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS mealbot_schema_migrations (
-			version integer PRIMARY KEY CHECK (version > 0),
-			name text NOT NULL UNIQUE,
-			applied_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)`); err != nil {
-		return mapDatabaseError("create migration ledger", err)
-	}
-
 	entries, err := migrationEntries()
 	if err != nil {
 		return err
@@ -40,6 +32,14 @@ func (r *Repository) Migrate(ctx context.Context) error {
 		}
 		if _, err = tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", migrationLockID); err != nil {
 			return rollback(tx, mapDatabaseError("lock migrations", err))
+		}
+		if _, err = tx.ExecContext(ctx, `
+			CREATE TABLE IF NOT EXISTS mealbot_schema_migrations (
+				version integer PRIMARY KEY CHECK (version > 0),
+				name text NOT NULL UNIQUE,
+				applied_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)`); err != nil {
+			return rollback(tx, mapDatabaseError("create migration ledger", err))
 		}
 		var applied bool
 		if err = tx.QueryRowContext(ctx,

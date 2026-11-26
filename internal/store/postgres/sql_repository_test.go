@@ -325,10 +325,10 @@ func TestReconstructHistory(t *testing.T) {
 func TestMigrateExecutesOrderedLedgerTransactions(t *testing.T) {
 	t.Parallel()
 	repository, mock := mockRepository(t)
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS mealbot_schema_migrations").WillReturnResult(sqlmock.NewResult(0, 0))
 	for version := 1; version <= 4; version++ {
 		mock.ExpectBegin()
 		mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs(migrationLockID).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("CREATE TABLE IF NOT EXISTS mealbot_schema_migrations").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectQuery("SELECT EXISTS").WithArgs(version).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 		mock.ExpectExec("(?s).+").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectExec("INSERT INTO mealbot_schema_migrations").WithArgs(version, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -646,10 +646,10 @@ func TestDeleteRoundNotFoundRollsBack(t *testing.T) {
 func TestMigrateSkipsAppliedVersions(t *testing.T) {
 	t.Parallel()
 	repository, mock := mockRepository(t)
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS mealbot_schema_migrations").WillReturnResult(sqlmock.NewResult(0, 0))
 	for version := 1; version <= 4; version++ {
 		mock.ExpectBegin()
 		mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs(migrationLockID).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("CREATE TABLE IF NOT EXISTS mealbot_schema_migrations").WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectQuery("SELECT EXISTS").WithArgs(version).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 		mock.ExpectCommit()
 	}
