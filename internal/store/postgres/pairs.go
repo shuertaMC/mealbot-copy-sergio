@@ -123,15 +123,19 @@ func (r *Repository) ListHistoricalPairs(ctx context.Context, organization strin
 }
 
 // PersistPairings atomically inserts all pairs/triples, updates every
-// relationship symmetrically, and marks the round complete. A completed round
-// returns a conflict so scheduler retries cannot duplicate persistence.
-func (r *Repository) PersistPairings(ctx context.Context, organization string, roundID int, pairs []domain.Pair) error {
+// relationship symmetrically, and marks the round complete when claimToken
+// still owns its scheduler lease. A completed or superseded claim returns a
+// conflict so scheduler retries cannot duplicate persistence.
+func (r *Repository) PersistPairings(ctx context.Context, organization string, roundID int, claimToken string, pairs []domain.Pair) error {
 	organization = strings.TrimSpace(organization)
 	if organization == "" {
 		return domain.NewValidationError("pair.organization", "must not be empty")
 	}
 	if roundID < 0 {
 		return domain.NewValidationError("round.id", "must be non-negative")
+	}
+	if strings.TrimSpace(claimToken) == "" {
+		return domain.NewValidationError("round.claimToken", "must not be empty")
 	}
 	seenMembers := make(map[string]struct{})
 	seenPairs := make(map[domain.Pair]struct{})
@@ -157,11 +161,13 @@ func (r *Repository) PersistPairings(ctx context.Context, organization string, r
 	}
 	var done bool
 	if err := tx.QueryRowContext(ctx, `
-		SELECT done FROM rounds WHERE organization = $1 AND id = $2 FOR UPDATE`,
-		organization, roundID,
+		SELECT done FROM rounds
+		WHERE organization = $1 AND id = $2 AND processing_token = $3
+		FOR UPDATE`,
+		organization, roundID, claimToken,
 	).Scan(&done); err != nil {
 		if err == sql.ErrNoRows {
-			return rollback(tx, domain.NewNotFoundError("round", fmt.Sprintf("%s/%d", organization, roundID)))
+			return rollback(tx, domain.NewConflictError("persist pairings", "scheduler claim is no longer owned", nil))
 		}
 		return rollback(tx, mapDatabaseError("lock pairing round", err))
 	}
@@ -227,12 +233,14 @@ func (r *Repository) PersistPairings(ctx context.Context, organization string, r
 		}
 	}
 	result, err := tx.ExecContext(ctx, `
-		UPDATE rounds SET done = true, processing_started_at = NULL
-		WHERE organization = $1 AND id = $2 AND done = false`, organization, roundID)
+		UPDATE rounds
+		SET done = true, processing_started_at = NULL, processing_token = NULL
+		WHERE organization = $1 AND id = $2 AND done = false AND processing_token = $3`,
+		organization, roundID, claimToken)
 	if err != nil {
 		return rollback(tx, mapDatabaseError("complete round", err))
 	}
-	if err := requireChanged(result, "round", fmt.Sprintf("%s/%d", organization, roundID)); err != nil {
+	if err := requireClaimOwned(result, "complete pairing round"); err != nil {
 		return rollback(tx, err)
 	}
 	if err := tx.Commit(); err != nil {

@@ -31,6 +31,9 @@ func TestSchedulerClaimsDeliversThenPersists(t *testing.T) {
 	if len(delivery.messages) != 2 || repository.persistCalls != 1 || len(repository.persisted) != 2 || len(repository.released) != 0 {
 		t.Fatalf("messages=%d persists=%d pairs=%d released=%v", len(delivery.messages), repository.persistCalls, len(repository.persisted), repository.released)
 	}
+	if repository.persistToken != "claim-acme-4" {
+		t.Fatalf("persist token = %q, want returned claim token", repository.persistToken)
+	}
 	if delivery.messages[0].From != "acme Mealbot <bot@example.test>" || delivery.messages[0].Subject != mailer.EmailSubject {
 		t.Fatalf("first message = %#v", delivery.messages[0])
 	}
@@ -173,6 +176,9 @@ func TestSchedulerFailureReleasesUnprocessedClaims(t *testing.T) {
 			if want := []string{"second/2", "third/3"}; !reflect.DeepEqual(repository.released, want) {
 				t.Fatalf("released = %v, want %v", repository.released, want)
 			}
+			if want := []string{"claim-second-2", "claim-third-3"}; !reflect.DeepEqual(repository.releaseTokens, want) {
+				t.Fatalf("release tokens = %v, want %v", repository.releaseTokens, want)
+			}
 		})
 	}
 }
@@ -230,32 +236,41 @@ func TestSchedulerValidationAndClock(t *testing.T) {
 }
 
 type schedulerRepository struct {
-	rounds       []domain.Round
-	members      []domain.Member
-	trait        *string
-	claimErr     error
-	memberErr    error
-	traitErr     error
-	persistErr   error
-	releaseErr   error
-	releaseErrs  map[string]error
-	claimNow     time.Time
-	staleBefore  time.Time
-	claimLimit   int
-	persistCalls int
-	persisted    []domain.Pair
-	released     []string
-	events       []string
+	rounds        []domain.Round
+	members       []domain.Member
+	trait         *string
+	claimErr      error
+	memberErr     error
+	traitErr      error
+	persistErr    error
+	releaseErr    error
+	releaseErrs   map[string]error
+	claimNow      time.Time
+	staleBefore   time.Time
+	claimLimit    int
+	persistCalls  int
+	persistToken  string
+	persisted     []domain.Pair
+	released      []string
+	releaseTokens []string
+	events        []string
 }
 
 func (repository *schedulerRepository) ClaimDueRounds(_ context.Context, now, staleBefore time.Time, limit int) ([]domain.Round, error) {
 	repository.claimNow, repository.staleBefore, repository.claimLimit = now, staleBefore, limit
-	return append([]domain.Round(nil), repository.rounds...), repository.claimErr
+	claimed := append([]domain.Round(nil), repository.rounds...)
+	for index := range claimed {
+		if claimed[index].ClaimToken == "" {
+			claimed[index].ClaimToken = fmt.Sprintf("claim-%s-%d", claimed[index].Organization, claimed[index].ID)
+		}
+	}
+	return claimed, repository.claimErr
 }
 
-func (repository *schedulerRepository) ReleaseRoundClaim(_ context.Context, organization string, roundID int) error {
+func (repository *schedulerRepository) ReleaseRoundClaim(_ context.Context, organization string, roundID int, claimToken string) error {
 	claim := fmt.Sprintf("%s/%d", organization, roundID)
 	repository.released = append(repository.released, claim)
+	repository.releaseTokens = append(repository.releaseTokens, claimToken)
 	if err := repository.releaseErrs[claim]; err != nil {
 		return err
 	}
@@ -273,8 +288,9 @@ func (repository *schedulerRepository) CrossMatchTrait(context.Context, string) 
 	return repository.trait, repository.traitErr
 }
 
-func (repository *schedulerRepository) PersistPairings(_ context.Context, _ string, _ int, pairs []domain.Pair) error {
+func (repository *schedulerRepository) PersistPairings(_ context.Context, _ string, _ int, claimToken string, pairs []domain.Pair) error {
 	repository.persistCalls++
+	repository.persistToken = claimToken
 	repository.events = append(repository.events, "persist")
 	repository.persisted = append([]domain.Pair(nil), pairs...)
 	return repository.persistErr

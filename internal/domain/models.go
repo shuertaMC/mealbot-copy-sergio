@@ -181,6 +181,9 @@ type Round struct {
 	ScheduledAt  time.Time `json:"scheduledAt"`
 	Done         bool      `json:"done"`
 	Pairs        []Pair    `json:"pairs,omitempty"`
+	// ClaimToken identifies the scheduler lease that owns this round and is
+	// never exposed through HTTP JSON.
+	ClaimToken string `json:"-"`
 }
 
 // NewRound validates and constructs an unfinished scheduled round.

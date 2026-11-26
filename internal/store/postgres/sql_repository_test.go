@@ -151,22 +151,25 @@ func TestRoundRepositoryMethods(t *testing.T) {
 	if err != nil || len(rounds) != 1 {
 		t.Fatalf("ListRounds = %#v, %v", rounds, err)
 	}
-	mock.ExpectExec("UPDATE rounds SET scheduled_date").WithArgs(when.Add(time.Hour), "org", 0).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE rounds SET scheduled_date = \$1, processing_started_at = NULL, processing_token = NULL`).WithArgs(when.Add(time.Hour), "org", 0).WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := repository.RescheduleRound(ctx, "org", 0, when.Add(time.Hour)); err != nil {
 		t.Fatalf("RescheduleRound: %v", err)
 	}
 
-	mock.ExpectQuery("WITH due AS").WithArgs(when, when.Add(-time.Minute), 4).
-		WillReturnRows(sqlmock.NewRows([]string{"organization", "id", "scheduled_date", "done"}).
-			AddRow("z-org", 2, when.Add(-time.Hour), false).
-			AddRow("org", 3, when.Add(-2*time.Hour), false).
-			AddRow("org", 1, when.Add(-2*time.Hour), false))
+	mock.ExpectQuery(`(?s)WITH due AS.*SET processing_started_at = \$1, processing_token = gen_random_uuid\(\)::text.*RETURNING.*processing_token`).WithArgs(when, when.Add(-time.Minute), 4).
+		WillReturnRows(sqlmock.NewRows([]string{"organization", "id", "scheduled_date", "done", "processing_token"}).
+			AddRow("z-org", 2, when.Add(-time.Hour), false, "token-z").
+			AddRow("org", 3, when.Add(-2*time.Hour), false, "token-3").
+			AddRow("org", 1, when.Add(-2*time.Hour), false, "token-1"))
 	due, err := repository.ClaimDueRounds(ctx, when, when.Add(-time.Minute), 4)
 	if err != nil || len(due) != 3 || due[0].ID != 1 || due[1].ID != 3 || due[2].Organization != "z-org" {
 		t.Fatalf("ClaimDueRounds = %#v, %v", due, err)
 	}
-	mock.ExpectExec("UPDATE rounds SET processing_started_at = NULL").WithArgs("org", 0).WillReturnResult(sqlmock.NewResult(0, 1))
-	if err := repository.ReleaseRoundClaim(ctx, "org", 0); err != nil {
+	if due[0].ClaimToken != "token-1" {
+		t.Fatalf("first claim token = %q", due[0].ClaimToken)
+	}
+	mock.ExpectExec("UPDATE rounds SET processing_started_at = NULL, processing_token = NULL").WithArgs("org", 0, "token-0").WillReturnResult(sqlmock.NewResult(0, 1))
+	if err := repository.ReleaseRoundClaim(ctx, "org", 0, "token-0"); err != nil {
 		t.Fatalf("ReleaseRoundClaim: %v", err)
 	}
 }
@@ -178,10 +181,10 @@ func TestDeleteRoundCompactsAndReconstructs(t *testing.T) {
 	memberColumns := []string{"organization", "email", "name", "metadata", "active", "last_round_with"}
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT name FROM organizations").WithArgs("org").WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("org"))
-	mock.ExpectQuery("SELECT 1 FROM rounds").WithArgs("org", 1).WillReturnRows(sqlmock.NewRows([]string{"one"}).AddRow(1))
+	mock.ExpectQuery(`(?s)SELECT id, processing_token.*id >= \$2.*ORDER BY id.*FOR UPDATE`).WithArgs("org", 1).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "processing_token"}).AddRow(1, nil).AddRow(2, nil).AddRow(3, nil))
 	mock.ExpectExec("DELETE FROM pairs").WithArgs("org", 1).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("DELETE FROM rounds").WithArgs("org", 1).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("SELECT id FROM rounds").WithArgs("org", 1).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(2).AddRow(3))
 	mock.ExpectExec("UPDATE rounds SET id").WithArgs(1, "org", 2).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE rounds SET id").WithArgs(2, "org", 3).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT organization, email, name, metadata, active, last_round_with").WithArgs("org").WillReturnRows(sqlmock.NewRows(memberColumns))
@@ -189,6 +192,22 @@ func TestDeleteRoundCompactsAndReconstructs(t *testing.T) {
 	mock.ExpectCommit()
 	if err := repository.DeleteRound(ctx, "org", 1); err != nil {
 		t.Fatalf("DeleteRound: %v", err)
+	}
+}
+
+func TestDeleteRoundRejectsActiveClaimBeforeMutation(t *testing.T) {
+	t.Parallel()
+	repository, mock := mockRepository(t)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT name FROM organizations").WithArgs("org").WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("org"))
+	mock.ExpectQuery(`(?s)SELECT id, processing_token.*id >= \$2.*ORDER BY id.*FOR UPDATE`).WithArgs("org", 1).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "processing_token"}).
+			AddRow(1, nil).
+			AddRow(2, "active-token").
+			AddRow(3, nil))
+	mock.ExpectRollback()
+	if err := repository.DeleteRound(context.Background(), "org", 1); !domain.IsConflict(err) {
+		t.Fatalf("DeleteRound active claim = %v, want conflict", err)
 	}
 }
 
@@ -212,16 +231,16 @@ func TestPairRepositoryMethods(t *testing.T) {
 		AddRow("org", "b@example.test", "B", []byte(`{}`), true, []byte(`{}`)).
 		AddRow("org", "c@example.test", "C", []byte(`{}`), false, []byte(`{}`))
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT done FROM rounds").WithArgs("org", 2).WillReturnRows(sqlmock.NewRows([]string{"done"}).AddRow(false))
+	mock.ExpectQuery("SELECT done FROM rounds").WithArgs("org", 2, "claim-2").WillReturnRows(sqlmock.NewRows([]string{"done"}).AddRow(false))
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM pairs").WithArgs("org", 2).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery("SELECT organization, email, name, metadata, active, last_round_with").WithArgs("org").WillReturnRows(memberRows)
 	mock.ExpectExec("INSERT INTO pairs").WithArgs("org", pair.ID1, pair.ID2, pair.ExtraID, 2).WillReturnResult(sqlmock.NewResult(0, 1))
 	for _, email := range pair.Members() {
 		mock.ExpectExec("UPDATE members SET last_round_with").WithArgs(sqlmock.AnyArg(), "org", email).WillReturnResult(sqlmock.NewResult(0, 1))
 	}
-	mock.ExpectExec("UPDATE rounds SET done = true").WithArgs("org", 2).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`(?s)UPDATE rounds.*processing_token = NULL.*processing_token = \$3`).WithArgs("org", 2, "claim-2").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	if err := repository.PersistPairings(ctx, "org", 2, []domain.Pair{pair}); err != nil {
+	if err := repository.PersistPairings(ctx, "org", 2, "claim-2", []domain.Pair{pair}); err != nil {
 		t.Fatalf("PersistPairings: %v", err)
 	}
 }
@@ -304,7 +323,7 @@ func TestMigrateExecutesOrderedLedgerTransactions(t *testing.T) {
 	t.Parallel()
 	repository, mock := mockRepository(t)
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS mealbot_schema_migrations").WillReturnResult(sqlmock.NewResult(0, 0))
-	for version := 1; version <= 3; version++ {
+	for version := 1; version <= 4; version++ {
 		mock.ExpectBegin()
 		mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs(migrationLockID).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectQuery("SELECT EXISTS").WithArgs(version).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
@@ -323,8 +342,8 @@ func TestConstraintsMigrationCanonicalizesBeforePrimaryKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrationEntries: %v", err)
 	}
-	if len(entries) != 3 {
-		t.Fatalf("migration count = %d, want 3", len(entries))
+	if len(entries) != 4 {
+		t.Fatalf("migration count = %d, want 4", len(entries))
 	}
 	migration := entries[2].sql
 	markers := []string{
@@ -336,6 +355,36 @@ func TestConstraintsMigrationCanonicalizesBeforePrimaryKey(t *testing.T) {
 		"INSERT INTO pairs (organization, round, id1, id2, extra_id)",
 		"ALTER TABLE pairs ADD CONSTRAINT pairs_pkey",
 		"ALTER TABLE pairs ADD CONSTRAINT pairs_canonical_order_check",
+	}
+	position := -1
+	for _, marker := range markers {
+		next := strings.Index(migration, marker)
+		if next <= position {
+			t.Fatalf("migration marker %q at %d, want after %d", marker, next, position)
+		}
+		position = next
+	}
+}
+
+func TestStableRoundClaimsMigrationRepairsPartialClaimsBeforeConstraint(t *testing.T) {
+	t.Parallel()
+	entries, err := migrationEntries()
+	if err != nil {
+		t.Fatalf("migrationEntries: %v", err)
+	}
+	if len(entries) != 4 {
+		t.Fatalf("migration count = %d, want 4", len(entries))
+	}
+	migration := entries[3].sql
+	markers := []string{
+		"ALTER TABLE rounds ADD COLUMN IF NOT EXISTS processing_token",
+		"UPDATE rounds",
+		"WHERE (processing_started_at IS NULL) <> (processing_token IS NULL)",
+		"OR length(btrim(processing_token)) = 0",
+		"DO $migration$",
+		"SELECT 1 FROM pg_constraint",
+		"rounds_processing_claim_consistent",
+		"length(btrim(processing_token)) > 0",
 	}
 	position := -1
 	for _, marker := range markers {
@@ -414,20 +463,26 @@ func TestRepositoryValidationAndErrorPaths(t *testing.T) {
 	if _, err := repository.ClaimDueRounds(ctx, time.Now(), time.Now().Add(-time.Hour), 0); !domain.IsValidation(err) {
 		t.Fatalf("zero due limit = %v", err)
 	}
-	if err := repository.PersistPairings(ctx, "org", -1, nil); !domain.IsValidation(err) {
+	if err := repository.PersistPairings(ctx, "org", -1, "token", nil); !domain.IsValidation(err) {
 		t.Fatalf("negative persisted round = %v", err)
 	}
+	if err := repository.PersistPairings(ctx, "org", 0, " ", nil); !domain.IsValidation(err) {
+		t.Fatalf("empty persistence claim token = %v", err)
+	}
 	pair, _ := domain.NewPair("a@example.test", "b@example.test")
-	if err := repository.PersistPairings(ctx, "org", 0, []domain.Pair{pair, pair}); !domain.IsConflict(err) {
+	if err := repository.PersistPairings(ctx, "org", 0, "token", []domain.Pair{pair, pair}); !domain.IsConflict(err) {
 		t.Fatalf("duplicate pair = %v", err)
 	}
 	mock.ExpectQuery("SELECT cross_match_trait FROM organizations").WithArgs("missing").WillReturnError(sql.ErrNoRows)
 	if _, err := repository.CrossMatchTrait(ctx, "missing"); !domain.IsNotFound(err) {
 		t.Fatalf("missing trait = %v", err)
 	}
-	mock.ExpectExec("UPDATE rounds SET processing_started_at = NULL").WithArgs("org", 9).WillReturnResult(sqlmock.NewResult(0, 0))
-	if err := repository.ReleaseRoundClaim(ctx, "org", 9); !domain.IsNotFound(err) {
-		t.Fatalf("missing release claim = %v", err)
+	if err := repository.ReleaseRoundClaim(ctx, "org", 9, " "); !domain.IsValidation(err) {
+		t.Fatalf("empty release token = %v", err)
+	}
+	mock.ExpectExec("UPDATE rounds SET processing_started_at = NULL, processing_token = NULL").WithArgs("org", 9, "stale-token").WillReturnResult(sqlmock.NewResult(0, 0))
+	if err := repository.ReleaseRoundClaim(ctx, "org", 9, "stale-token"); !domain.IsConflict(err) {
+		t.Fatalf("stale release claim = %v", err)
 	}
 }
 
@@ -500,8 +555,8 @@ func TestFindDueRoundsUsesCallerClock(t *testing.T) {
 	t.Parallel()
 	repository, mock := mockRepository(t)
 	cutoff := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
-	mock.ExpectQuery("WITH due AS").WithArgs(cutoff, cutoff.Add(-defaultClaimLease), 100).
-		WillReturnRows(sqlmock.NewRows([]string{"organization", "id", "scheduled_date", "done"}))
+	mock.ExpectQuery(`(?s)WITH due AS.*SET processing_started_at = \$1, processing_token = gen_random_uuid\(\)::text.*RETURNING.*processing_token`).WithArgs(cutoff, cutoff.Add(-defaultClaimLease), 100).
+		WillReturnRows(sqlmock.NewRows([]string{"organization", "id", "scheduled_date", "done", "processing_token"}))
 	rounds, err := repository.FindDueRounds(context.Background(), cutoff)
 	if err != nil || len(rounds) != 0 {
 		t.Fatalf("FindDueRounds = %#v, %v", rounds, err)
@@ -513,12 +568,23 @@ func TestCompletedPairingRollsBack(t *testing.T) {
 	repository, mock := mockRepository(t)
 	pair, _ := domain.NewPair("a@example.test", "b@example.test")
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT done FROM rounds").WithArgs("org", 1).
+	mock.ExpectQuery("SELECT done FROM rounds").WithArgs("org", 1, "claim-1").
 		WillReturnRows(sqlmock.NewRows([]string{"done"}).AddRow(true))
 	mock.ExpectRollback()
-	err := repository.PersistPairings(context.Background(), "org", 1, []domain.Pair{pair})
+	err := repository.PersistPairings(context.Background(), "org", 1, "claim-1", []domain.Pair{pair})
 	if !domain.IsConflict(err) {
 		t.Fatalf("completed PersistPairings = %v", err)
+	}
+}
+
+func TestPersistPairingsRejectsStaleClaimBeforeWrites(t *testing.T) {
+	t.Parallel()
+	repository, mock := mockRepository(t)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT done FROM rounds").WithArgs("org", 1, "stale-token").WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
+	if err := repository.PersistPairings(context.Background(), "org", 1, "stale-token", nil); !domain.IsConflict(err) {
+		t.Fatalf("stale PersistPairings = %v, want conflict", err)
 	}
 }
 
@@ -529,23 +595,23 @@ func TestPersistPairingsRejectsMissingMemberAndPartialState(t *testing.T) {
 		repository, mock := mockRepository(t)
 		pair, _ := domain.NewPair("a@example.test", "b@example.test")
 		mock.ExpectBegin()
-		mock.ExpectQuery("SELECT done FROM rounds").WithArgs("org", 1).WillReturnRows(sqlmock.NewRows([]string{"done"}).AddRow(false))
+		mock.ExpectQuery("SELECT done FROM rounds").WithArgs("org", 1, "claim-1").WillReturnRows(sqlmock.NewRows([]string{"done"}).AddRow(false))
 		mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM pairs").WithArgs("org", 1).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 		mock.ExpectQuery("SELECT organization, email, name, metadata, active, last_round_with").WithArgs("org").WillReturnRows(
 			sqlmock.NewRows([]string{"organization", "email", "name", "metadata", "active", "last_round_with"}).
 				AddRow("org", "a@example.test", "A", []byte(`{}`), true, []byte(`{}`)))
 		mock.ExpectRollback()
-		if err := repository.PersistPairings(ctx, "org", 1, []domain.Pair{pair}); !domain.IsIntegrity(err) {
+		if err := repository.PersistPairings(ctx, "org", 1, "claim-1", []domain.Pair{pair}); !domain.IsIntegrity(err) {
 			t.Fatalf("missing member PersistPairings = %v", err)
 		}
 	})
 	t.Run("partial state", func(t *testing.T) {
 		repository, mock := mockRepository(t)
 		mock.ExpectBegin()
-		mock.ExpectQuery("SELECT done FROM rounds").WithArgs("org", 1).WillReturnRows(sqlmock.NewRows([]string{"done"}).AddRow(false))
+		mock.ExpectQuery("SELECT done FROM rounds").WithArgs("org", 1, "claim-1").WillReturnRows(sqlmock.NewRows([]string{"done"}).AddRow(false))
 		mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM pairs").WithArgs("org", 1).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 		mock.ExpectRollback()
-		if err := repository.PersistPairings(ctx, "org", 1, nil); !domain.IsIntegrity(err) {
+		if err := repository.PersistPairings(ctx, "org", 1, "claim-1", nil); !domain.IsIntegrity(err) {
 			t.Fatalf("partial PersistPairings = %v", err)
 		}
 	})
@@ -571,7 +637,7 @@ func TestDeleteRoundNotFoundRollsBack(t *testing.T) {
 	repository, mock := mockRepository(t)
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT name FROM organizations").WithArgs("org").WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("org"))
-	mock.ExpectQuery("SELECT 1 FROM rounds").WithArgs("org", 9).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`(?s)SELECT id, processing_token.*id >= \$2.*ORDER BY id.*FOR UPDATE`).WithArgs("org", 9).WillReturnRows(sqlmock.NewRows([]string{"id", "processing_token"}))
 	mock.ExpectRollback()
 	if err := repository.DeleteRound(context.Background(), "org", 9); !domain.IsNotFound(err) {
 		t.Fatalf("DeleteRound missing = %v", err)
@@ -582,7 +648,7 @@ func TestMigrateSkipsAppliedVersions(t *testing.T) {
 	t.Parallel()
 	repository, mock := mockRepository(t)
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS mealbot_schema_migrations").WillReturnResult(sqlmock.NewResult(0, 0))
-	for version := 1; version <= 3; version++ {
+	for version := 1; version <= 4; version++ {
 		mock.ExpectBegin()
 		mock.ExpectExec("SELECT pg_advisory_xact_lock").WithArgs(migrationLockID).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectQuery("SELECT EXISTS").WithArgs(version).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))

@@ -153,8 +153,8 @@ func TestMigrationEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrationEntries() error = %v", err)
 	}
-	if len(entries) != 3 {
-		t.Fatalf("len(entries) = %d, want 3", len(entries))
+	if len(entries) != 4 {
+		t.Fatalf("len(entries) = %d, want 4", len(entries))
 	}
 	for index, entry := range entries {
 		if entry.version != index+1 {
@@ -178,6 +178,7 @@ func TestSchemaBootstrapIsFailFastAndTransactional(t *testing.T) {
 		`\ir migrations/001_initial_schema.sql`,
 		`\ir migrations/002_reconcile_legacy_schema.sql`,
 		`\ir migrations/003_constraints_and_indexes.sql`,
+		`\ir migrations/004_stable_round_claims.sql`,
 		"COMMIT;",
 	}
 	position := -1

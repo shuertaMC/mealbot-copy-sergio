@@ -80,7 +80,7 @@ func (r *Repository) RescheduleRound(ctx context.Context, organization string, r
 		return domain.NewValidationError("round.scheduledAt", "must be set")
 	}
 	result, err := r.db.ExecContext(ctx, `
-		UPDATE rounds SET scheduled_date = $1, processing_started_at = NULL
+		UPDATE rounds SET scheduled_date = $1, processing_started_at = NULL, processing_token = NULL
 		WHERE organization = $2 AND id = $3`, scheduledAt.UTC(), organization, roundID)
 	if err != nil {
 		return mapDatabaseError("reschedule round", err)
@@ -105,15 +105,49 @@ func (r *Repository) DeleteRound(ctx context.Context, organization string, round
 	if err := lockOrganization(ctx, tx, organization); err != nil {
 		return rollback(tx, err)
 	}
-	var exists int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT 1 FROM rounds WHERE organization = $1 AND id = $2 FOR UPDATE`,
-		organization, roundID,
-	).Scan(&exists); err != nil {
-		if err == sql.ErrNoRows {
-			return rollback(tx, domain.NewNotFoundError("round", fmt.Sprintf("%s/%d", organization, roundID)))
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, processing_token
+		FROM rounds
+		WHERE organization = $1 AND id >= $2
+		ORDER BY id
+		FOR UPDATE`, organization, roundID)
+	if err != nil {
+		return rollback(tx, mapDatabaseError("lock affected rounds", err))
+	}
+	ids := make([]int, 0)
+	targetFound := false
+	claimedRoundID := -1
+	for rows.Next() {
+		var id int
+		var token sql.NullString
+		if err := rows.Scan(&id, &token); err != nil {
+			rows.Close()
+			return rollback(tx, mapDatabaseError("scan affected round", err))
 		}
-		return rollback(tx, mapDatabaseError("lock round", err))
+		ids = append(ids, id)
+		if id == roundID {
+			targetFound = true
+		}
+		if token.Valid && claimedRoundID < 0 {
+			claimedRoundID = id
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return rollback(tx, mapDatabaseError("scan affected rounds", err))
+	}
+	if err := rows.Close(); err != nil {
+		return rollback(tx, fmt.Errorf("postgres close affected rounds: %w", err))
+	}
+	if !targetFound {
+		return rollback(tx, domain.NewNotFoundError("round", fmt.Sprintf("%s/%d", organization, roundID)))
+	}
+	if claimedRoundID >= 0 {
+		return rollback(tx, domain.NewConflictError(
+			"delete round",
+			fmt.Sprintf("round %d is owned by an active scheduler claim", claimedRoundID),
+			nil,
+		))
 	}
 	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM pairs WHERE organization = $1 AND round = $2", organization, roundID,
@@ -125,29 +159,10 @@ func (r *Repository) DeleteRound(ctx context.Context, organization string, round
 	); err != nil {
 		return rollback(tx, mapDatabaseError("delete round", err))
 	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id FROM rounds WHERE organization = $1 AND id > $2 ORDER BY id FOR UPDATE`,
-		organization, roundID)
-	if err != nil {
-		return rollback(tx, mapDatabaseError("lock subsequent rounds", err))
-	}
-	ids := make([]int, 0)
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return rollback(tx, mapDatabaseError("scan subsequent round", err))
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return rollback(tx, mapDatabaseError("scan subsequent rounds", err))
-	}
-	if err := rows.Close(); err != nil {
-		return rollback(tx, fmt.Errorf("postgres close subsequent rounds: %w", err))
-	}
 	for _, id := range ids {
+		if id == roundID {
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE rounds SET id = $1 WHERE organization = $2 AND id = $3`,
 			id-1, organization, id,
@@ -188,16 +203,17 @@ func (r *Repository) ClaimDueRounds(ctx context.Context, now, staleBefore time.T
 			FOR UPDATE SKIP LOCKED
 			LIMIT $3
 		)
-		UPDATE rounds AS r SET processing_started_at = $1
+		UPDATE rounds AS r
+		SET processing_started_at = $1, processing_token = gen_random_uuid()::text
 		FROM due
 		WHERE r.organization = due.organization AND r.id = due.id
-		RETURNING r.organization, r.id, r.scheduled_date, r.done`,
+		RETURNING r.organization, r.id, r.scheduled_date, r.done, r.processing_token`,
 		now.UTC(), staleBefore.UTC(), limit)
 	if err != nil {
 		return nil, mapDatabaseError("claim due rounds", err)
 	}
 	defer rows.Close()
-	rounds, err := scanRounds(rows, "claim due rounds")
+	rounds, err := scanClaimedRounds(rows, "claim due rounds")
 	if err != nil {
 		return nil, err
 	}
@@ -220,18 +236,27 @@ func (r *Repository) FindDueRounds(ctx context.Context, cutoff time.Time) ([]dom
 }
 
 // ReleaseRoundClaim makes a failed unfinished round immediately eligible for
-// retry. Completed rounds are never reopened.
-func (r *Repository) ReleaseRoundClaim(ctx context.Context, organization string, roundID int) error {
+// retry only when claimToken still owns its scheduler lease. Completed rounds
+// are never reopened.
+func (r *Repository) ReleaseRoundClaim(ctx context.Context, organization string, roundID int, claimToken string) error {
+	organization = strings.TrimSpace(organization)
+	if organization == "" {
+		return domain.NewValidationError("round.organization", "must not be empty")
+	}
 	if roundID < 0 {
 		return domain.NewValidationError("round.id", "must be non-negative")
 	}
+	if strings.TrimSpace(claimToken) == "" {
+		return domain.NewValidationError("round.claimToken", "must not be empty")
+	}
 	result, err := r.db.ExecContext(ctx, `
-		UPDATE rounds SET processing_started_at = NULL
-		WHERE organization = $1 AND id = $2 AND done = false`, organization, roundID)
+		UPDATE rounds SET processing_started_at = NULL, processing_token = NULL
+		WHERE organization = $1 AND id = $2 AND done = false AND processing_token = $3`,
+		organization, roundID, claimToken)
 	if err != nil {
 		return mapDatabaseError("release round claim", err)
 	}
-	return requireChanged(result, "round", fmt.Sprintf("%s/%d", organization, roundID))
+	return requireClaimOwned(result, "release round claim")
 }
 
 func scanRounds(rows *sql.Rows, operation string) ([]domain.Round, error) {
@@ -239,6 +264,23 @@ func scanRounds(rows *sql.Rows, operation string) ([]domain.Round, error) {
 	for rows.Next() {
 		var round domain.Round
 		if err := rows.Scan(&round.Organization, &round.ID, &round.ScheduledAt, &round.Done); err != nil {
+			return nil, mapDatabaseError(operation, err)
+		}
+		round.ScheduledAt = round.ScheduledAt.UTC()
+		round.Pairs = []domain.Pair{}
+		rounds = append(rounds, round)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, mapDatabaseError(operation, err)
+	}
+	return rounds, nil
+}
+
+func scanClaimedRounds(rows *sql.Rows, operation string) ([]domain.Round, error) {
+	rounds := make([]domain.Round, 0)
+	for rows.Next() {
+		var round domain.Round
+		if err := rows.Scan(&round.Organization, &round.ID, &round.ScheduledAt, &round.Done, &round.ClaimToken); err != nil {
 			return nil, mapDatabaseError(operation, err)
 		}
 		round.ScheduledAt = round.ScheduledAt.UTC()
@@ -271,6 +313,17 @@ func requireChanged(result sql.Result, resource, identifier string) error {
 	}
 	if changed == 0 {
 		return domain.NewNotFoundError(resource, identifier)
+	}
+	return nil
+}
+
+func requireClaimOwned(result sql.Result, operation string) error {
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("postgres inspect %s update: %w", operation, err)
+	}
+	if changed == 0 {
+		return domain.NewConflictError(operation, "scheduler claim is no longer owned", nil)
 	}
 	return nil
 }

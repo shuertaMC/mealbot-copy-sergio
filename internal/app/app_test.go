@@ -88,9 +88,11 @@ func (*fakeRepository) ListPairs(context.Context, string) ([]domain.Round, error
 func (*fakeRepository) ClaimDueRounds(context.Context, time.Time, time.Time, int) ([]domain.Round, error) {
 	return []domain.Round{}, nil
 }
-func (*fakeRepository) ReleaseRoundClaim(context.Context, string, int) error              { return nil }
-func (*fakeRepository) PersistPairings(context.Context, string, int, []domain.Pair) error { return nil }
-func (r *fakeRepository) Migrate(context.Context) error                                   { r.migrations++; return r.migrateErr }
+func (*fakeRepository) ReleaseRoundClaim(context.Context, string, int, string) error { return nil }
+func (*fakeRepository) PersistPairings(context.Context, string, int, string, []domain.Pair) error {
+	return nil
+}
+func (r *fakeRepository) Migrate(context.Context) error { r.migrations++; return r.migrateErr }
 func (r *fakeRepository) ReconstructHistory(context.Context) error {
 	r.reconstructions++
 	return r.reconstructErr

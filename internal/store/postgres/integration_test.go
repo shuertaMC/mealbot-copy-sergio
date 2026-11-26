@@ -143,19 +143,22 @@ func TestPostgresRepositoryIntegration(t *testing.T) {
 	round1, _ := repository.AddRound(ctx, organization.Name, base.Add(time.Hour))
 	round2, _ := repository.AddRound(ctx, organization.Name, base.Add(2*time.Hour))
 	round3, _ := repository.AddRound(ctx, organization.Name, base.Add(3*time.Hour))
-	newTime := base.Add(90 * time.Minute)
+	newTime := base.Add(24 * time.Hour)
 	if err := repository.RescheduleRound(ctx, organization.Name, round1.ID, newTime); err != nil {
 		t.Fatalf("RescheduleRound: %v", err)
 	}
 	pairAB, _ := domain.NewPair(memberA.Email, memberB.Email)
 	triple, _ := domain.NewPair(memberA.Email, memberB.Email, memberC.Email)
-	if err := repository.PersistPairings(ctx, organization.Name, round0.ID, nil); err != nil {
+	claim0 := claimRoundForIntegration(t, ctx, repository, base, round0.ID)
+	if err := repository.PersistPairings(ctx, organization.Name, round0.ID, claim0.ClaimToken, nil); err != nil {
 		t.Fatalf("PersistPairings empty: %v", err)
 	}
-	if err := repository.PersistPairings(ctx, organization.Name, round2.ID, []domain.Pair{pairAB}); err != nil {
+	claim2 := claimRoundForIntegration(t, ctx, repository, base.Add(2*time.Hour), round2.ID)
+	if err := repository.PersistPairings(ctx, organization.Name, round2.ID, claim2.ClaimToken, []domain.Pair{pairAB}); err != nil {
 		t.Fatalf("PersistPairings pair: %v", err)
 	}
-	if err := repository.PersistPairings(ctx, organization.Name, round3.ID, []domain.Pair{triple}); err != nil {
+	claim3 := claimRoundForIntegration(t, ctx, repository, base.Add(3*time.Hour), round3.ID)
+	if err := repository.PersistPairings(ctx, organization.Name, round3.ID, claim3.ClaimToken, []domain.Pair{triple}); err != nil {
 		t.Fatalf("PersistPairings triple: %v", err)
 	}
 	if err := repository.DeleteRound(ctx, organization.Name, round1.ID); err != nil {
@@ -194,15 +197,58 @@ func TestPostgresRepositoryIntegration(t *testing.T) {
 	if err != nil || len(claimed) != 1 || claimed[0].ID != due.ID {
 		t.Fatalf("ClaimDueRounds = %#v, %v", claimed, err)
 	}
+	firstToken := claimed[0].ClaimToken
+	if firstToken == "" {
+		t.Fatal("ClaimDueRounds returned an empty owner token")
+	}
+	entries, err := migrationEntries()
+	if err != nil {
+		t.Fatalf("read migrations for idempotence check: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, entries[3].sql); err != nil {
+		t.Fatalf("re-execute stable claim migration: %v", err)
+	}
+	var retainedToken string
+	if err := db.QueryRowContext(ctx, `
+		SELECT processing_token FROM rounds WHERE organization = $1 AND id = $2`,
+		organization.Name, due.ID,
+	).Scan(&retainedToken); err != nil || retainedToken != firstToken {
+		t.Fatalf("tokenized claim after migration re-execution = %q, %v; want %q", retainedToken, err, firstToken)
+	}
 	again, err := repository.ClaimDueRounds(ctx, base, base.Add(-15*time.Minute), 10)
 	if err != nil || len(again) != 0 {
 		t.Fatalf("second ClaimDueRounds = %#v, %v", again, err)
 	}
-	if err := repository.ReleaseRoundClaim(ctx, organization.Name, due.ID); err != nil {
+	if err := repository.ReleaseRoundClaim(ctx, organization.Name, due.ID, firstToken); err != nil {
 		t.Fatalf("ReleaseRoundClaim: %v", err)
+	}
+	reclaimed := claimRoundForIntegration(t, ctx, repository, base, due.ID)
+	if reclaimed.ClaimToken == firstToken {
+		t.Fatalf("reclaimed token = %q, want a new owner", reclaimed.ClaimToken)
+	}
+	if err := repository.ReleaseRoundClaim(ctx, organization.Name, due.ID, firstToken); !domain.IsConflict(err) {
+		t.Fatalf("stale ReleaseRoundClaim = %v, want conflict", err)
+	}
+	if err := repository.PersistPairings(ctx, organization.Name, due.ID, firstToken, nil); !domain.IsConflict(err) {
+		t.Fatalf("stale PersistPairings = %v, want conflict", err)
+	}
+	beforeRejectedDelete, err := repository.ListRounds(ctx, organization.Name)
+	if err != nil {
+		t.Fatalf("ListRounds before claimed compaction: %v", err)
+	}
+	if err := repository.DeleteRound(ctx, organization.Name, 2); !domain.IsConflict(err) {
+		t.Fatalf("DeleteRound across active claim = %v, want conflict", err)
+	}
+	afterRejectedDelete, err := repository.ListRounds(ctx, organization.Name)
+	if err != nil || !sameRoundIDs(beforeRejectedDelete, afterRejectedDelete) {
+		t.Fatalf("round IDs changed after rejected deletion: before=%#v after=%#v err=%v", beforeRejectedDelete, afterRejectedDelete, err)
+	}
+	if err := repository.ReleaseRoundClaim(ctx, organization.Name, due.ID, reclaimed.ClaimToken); err != nil {
+		t.Fatalf("release reclaimed round: %v", err)
 	}
 
 	rollbackRound, _ := repository.AddRound(ctx, organization.Name, base.Add(-2*time.Hour))
+	rollbackClaim := claimRoundForIntegration(t, ctx, repository, base, rollbackRound.ID)
 	if _, err := db.ExecContext(ctx, `
 		CREATE FUNCTION mealbot_test_fail_history() RETURNS trigger LANGUAGE plpgsql AS $$
 		BEGIN RAISE EXCEPTION 'injected history failure'; END $$;
@@ -210,7 +256,7 @@ func TestPostgresRepositoryIntegration(t *testing.T) {
 		FOR EACH ROW EXECUTE FUNCTION mealbot_test_fail_history()`); err != nil {
 		t.Fatalf("create failure trigger: %v", err)
 	}
-	if err := repository.PersistPairings(ctx, organization.Name, rollbackRound.ID, []domain.Pair{pairAB}); err == nil {
+	if err := repository.PersistPairings(ctx, organization.Name, rollbackRound.ID, rollbackClaim.ClaimToken, []domain.Pair{pairAB}); err == nil {
 		t.Fatal("PersistPairings succeeded despite injected SQL error")
 	}
 	if _, err := db.ExecContext(ctx, `DROP TRIGGER mealbot_test_fail_history ON members; DROP FUNCTION mealbot_test_fail_history()`); err != nil {
@@ -226,6 +272,9 @@ func TestPostgresRepositoryIntegration(t *testing.T) {
 	}
 	if pairCount != 0 || done {
 		t.Fatalf("failed pairing partially committed: pairs=%d done=%v", pairCount, done)
+	}
+	if err := repository.ReleaseRoundClaim(ctx, organization.Name, rollbackRound.ID, rollbackClaim.ClaimToken); err != nil {
+		t.Fatalf("release rollback test claim: %v", err)
 	}
 
 	if _, err := db.ExecContext(ctx, `ALTER TABLE pairs DROP CONSTRAINT pairs_id2_fkey`); err != nil {
@@ -394,6 +443,27 @@ func assertSymmetricRound(t *testing.T, members []domain.Member, left, right str
 	if values[left].LastRoundWith[right] != round || values[right].LastRoundWith[left] != round {
 		t.Fatalf("history %s/%s is not symmetric at round %d: %#v", left, right, round, values)
 	}
+}
+
+func claimRoundForIntegration(t *testing.T, ctx context.Context, repository *Repository, now time.Time, roundID int) domain.Round {
+	t.Helper()
+	claimed, err := repository.ClaimDueRounds(ctx, now, now.Add(-15*time.Minute), 1)
+	if err != nil || len(claimed) != 1 || claimed[0].ID != roundID || claimed[0].ClaimToken == "" {
+		t.Fatalf("claim round %d = %#v, %v", roundID, claimed, err)
+	}
+	return claimed[0]
+}
+
+func sameRoundIDs(left, right []domain.Round) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].ID != right[index].ID {
+			return false
+		}
+	}
+	return true
 }
 
 func TestIntegrationErrorClassificationContract(t *testing.T) {

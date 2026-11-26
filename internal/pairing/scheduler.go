@@ -29,13 +29,13 @@ type TraitLoader interface {
 // DueRoundClaimer atomically leases due rounds and releases failed claims.
 type DueRoundClaimer interface {
 	ClaimDueRounds(ctx context.Context, now, staleBefore time.Time, limit int) ([]domain.Round, error)
-	ReleaseRoundClaim(ctx context.Context, organization string, roundID int) error
+	ReleaseRoundClaim(ctx context.Context, organization string, roundID int, claimToken string) error
 }
 
 // PairingPersister atomically inserts groups, updates histories, and completes
 // a round. Implementations must leave all state unchanged on failure.
 type PairingPersister interface {
-	PersistPairings(ctx context.Context, organization string, roundID int, pairs []domain.Pair) error
+	PersistPairings(ctx context.Context, organization string, roundID int, claimToken string, pairs []domain.Pair) error
 }
 
 // MailDelivery delivers one provider-neutral message.
@@ -128,7 +128,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			resultErr := err
 			releaseCtx := context.WithoutCancel(ctx)
 			for _, claimed := range rounds[index:] {
-				if releaseErr := s.rounds.ReleaseRoundClaim(releaseCtx, claimed.Organization, claimed.ID); releaseErr != nil {
+				if releaseErr := s.rounds.ReleaseRoundClaim(releaseCtx, claimed.Organization, claimed.ID, claimed.ClaimToken); releaseErr != nil {
 					resultErr = errors.Join(
 						resultErr,
 						fmt.Errorf("pairing release round claim %s/%d: %w", claimed.Organization, claimed.ID, releaseErr),
@@ -197,7 +197,7 @@ func (s *Scheduler) ProcessRound(ctx context.Context, scheduled domain.Round) er
 		}
 		persisted = append(persisted, pair)
 	}
-	if err := s.persistence.PersistPairings(ctx, scheduled.Organization, scheduled.ID, persisted); err != nil {
+	if err := s.persistence.PersistPairings(ctx, scheduled.Organization, scheduled.ID, scheduled.ClaimToken, persisted); err != nil {
 		return fmt.Errorf("pairing persist round: %w", err)
 	}
 	return nil

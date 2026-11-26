@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -168,6 +169,14 @@ func TestRoundConstructionAndValidation(t *testing.T) {
 	}
 	if round.Organization != "org" || round.ID != 2 || !round.ScheduledAt.Equal(scheduled) || round.Done || round.Pairs == nil {
 		t.Errorf("round = %#v", round)
+	}
+	round.ClaimToken = "scheduler-secret"
+	encoded, err := json.Marshal(round)
+	if err != nil {
+		t.Fatalf("json.Marshal(round): %v", err)
+	}
+	if strings.Contains(string(encoded), "scheduler-secret") || strings.Contains(string(encoded), "ClaimToken") {
+		t.Fatalf("round JSON exposed claim token: %s", encoded)
 	}
 
 	pairAB, _ := NewPair("a", "b")

@@ -6,4 +6,5 @@ BEGIN;
 \ir migrations/001_initial_schema.sql
 \ir migrations/002_reconcile_legacy_schema.sql
 \ir migrations/003_constraints_and_indexes.sql
+\ir migrations/004_stable_round_claims.sql
 COMMIT;
