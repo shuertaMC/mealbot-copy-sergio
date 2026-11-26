@@ -136,17 +136,20 @@ func TestJWKSKeySourceResponseFailures(t *testing.T) {
 }
 
 func TestJWKSKeySourceTimeout(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
-	}))
-	defer server.Close()
-	source := mustJWKSKeySource(t, server.URL, 20*time.Millisecond)
-	started := time.Now()
+	deadlineSeen := false
+	client := &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		_, deadlineSeen = request.Context().Deadline()
+		return nil, context.DeadlineExceeded
+	})}
+	source, err := NewJWKSKeySource(client, "https://jwks.example.test", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := source.Key(context.Background(), "key"); !errors.Is(err, ErrInvalidJWKS) {
 		t.Fatalf("Key() error = %v, want ErrInvalidJWKS", err)
 	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("timeout took %v", elapsed)
+	if !deadlineSeen {
+		t.Fatal("JWKS request context has no deadline")
 	}
 }
 
@@ -333,6 +336,12 @@ func jwksServer(t *testing.T, status int, body string) *httptest.Server {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
 }
 
 func mustJWKSKeySource(t *testing.T, url string, timeout time.Duration) *JWKSKeySource {

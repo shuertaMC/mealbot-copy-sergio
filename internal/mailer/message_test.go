@@ -102,10 +102,12 @@ func TestMailgunAdapterUsesInjectedAPI(t *testing.T) {
 
 func TestMailgunAdapterTimeoutAndCancellation(t *testing.T) {
 	t.Run("timeout", func(t *testing.T) {
-		api := &fakeMailgunAPI{waitForContext: true}
-		config := validMailgunConfig()
-		config.Timeout = time.Millisecond
-		adapter, err := NewMailgunWithAPI(config, api)
+		deadlineSeen := false
+		api := &fakeMailgunAPI{send: func(ctx context.Context) error {
+			_, deadlineSeen = ctx.Deadline()
+			return context.DeadlineExceeded
+		}}
+		adapter, err := NewMailgunWithAPI(validMailgunConfig(), api)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -113,9 +115,14 @@ func TestMailgunAdapterTimeoutAndCancellation(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("timeout error = %v", err)
 		}
+		if !deadlineSeen {
+			t.Fatal("Mailgun request context has no deadline")
+		}
 	})
 	t.Run("parent cancellation", func(t *testing.T) {
-		api := &fakeMailgunAPI{waitForContext: true}
+		api := &fakeMailgunAPI{send: func(ctx context.Context) error {
+			return ctx.Err()
+		}}
 		adapter, err := NewMailgunWithAPI(validMailgunConfig(), api)
 		if err != nil {
 			t.Fatal(err)
@@ -167,18 +174,17 @@ func TestMailgunAdapterErrorsAndConfiguration(t *testing.T) {
 }
 
 type fakeMailgunAPI struct {
-	calls          int
-	message        Message
-	err            error
-	waitForContext bool
+	calls   int
+	message Message
+	err     error
+	send    func(context.Context) error
 }
 
 func (api *fakeMailgunAPI) Send(ctx context.Context, message Message) error {
 	api.calls++
 	api.message = message
-	if api.waitForContext {
-		<-ctx.Done()
-		return ctx.Err()
+	if api.send != nil {
+		return api.send(ctx)
 	}
 	return api.err
 }

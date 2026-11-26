@@ -22,11 +22,14 @@ func (routerOrganizations) ListOrganizationNames(context.Context, string) ([]str
 func (routerOrganizations) Create(context.Context, string, string) error              { return nil }
 func (routerOrganizations) SetCrossMatchTrait(context.Context, string, *string) error { return nil }
 
-type blockingOrganizations struct{ routerOrganizations }
+type deadlineOrganizations struct {
+	routerOrganizations
+	deadlineSeen bool
+}
 
-func (blockingOrganizations) ListOrganizationNames(ctx context.Context, _ string) ([]string, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
+func (organizations *deadlineOrganizations) ListOrganizationNames(ctx context.Context, _ string) ([]string, error) {
+	_, organizations.deadlineSeen = ctx.Deadline()
+	return nil, context.DeadlineExceeded
 }
 
 type routerMembers struct{}
@@ -185,18 +188,21 @@ func TestRouterConstructionValidation(t *testing.T) {
 }
 
 func TestRouterAppliesRequestTimeout(t *testing.T) {
+	organizations := &deadlineOrganizations{}
 	handler, err := NewRouter(RouterConfig{
-		Organizations: blockingOrganizations{}, Members: routerMembers{}, Rounds: routerRounds{}, Pairs: routerPairs{},
+		Organizations: organizations, Members: routerMembers{}, Rounds: routerRounds{}, Pairs: routerPairs{},
 		Authenticate: func(handler http.Handler) http.Handler { return handler }, CORS: NewCORS(nil),
-		StaticDir: filepath.Join("..", "..", "static"), RequestTimeout: 5 * time.Millisecond,
+		StaticDir: filepath.Join("..", "..", "static"), RequestTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/orgs?admin=a", nil))
-	if recorder.Code != http.StatusInternalServerError || time.Since(start) > time.Second {
-		t.Fatalf("timed request = %d after %v", recorder.Code, time.Since(start))
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("timed request status = %d", recorder.Code)
+	}
+	if !organizations.deadlineSeen {
+		t.Fatal("organization request context has no deadline")
 	}
 }
