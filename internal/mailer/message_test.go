@@ -3,6 +3,8 @@ package mailer
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -97,6 +99,87 @@ func TestMailgunAdapterUsesInjectedAPI(t *testing.T) {
 	api.message.To[0] = "mutated"
 	if message.To[0] != "a@example.test" {
 		t.Fatalf("provider mutated caller message: %#v", message)
+	}
+}
+
+func TestMailgunProductionSDKSendPath(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		response   string
+		wantError  string
+	}{
+		{
+			name:       "success",
+			statusCode: http.StatusOK,
+			response:   `{"message":"Queued. Thank you.","id":"<message-id@mg.example.test>"}`,
+		},
+		{
+			name:       "provider error",
+			statusCode: http.StatusBadGateway,
+			response:   `{"message":"provider unavailable"}`,
+			wantError:  "mailgun send message failed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			message := validMessage()
+			server := httptest.NewServer(http.StripPrefix("/v3", http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodPost {
+					t.Errorf("method = %q, want %q", request.Method, http.MethodPost)
+				}
+				if request.URL.Path != "/mg.example.test/messages" {
+					t.Errorf("path = %q, want %q", request.URL.Path, "/mg.example.test/messages")
+				}
+				username, password, ok := request.BasicAuth()
+				if !ok || username != "api" || password != "key" {
+					t.Errorf("basic auth = %q, %q, %t; want %q, %q, true", username, password, ok, "api", "key")
+				}
+				if err := request.ParseMultipartForm(1 << 20); err != nil {
+					t.Errorf("ParseMultipartForm: %v", err)
+					response.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if got := request.MultipartForm.Value["from"]; !reflect.DeepEqual(got, []string{message.From}) {
+					t.Errorf("from = %v, want %v", got, []string{message.From})
+				}
+				if got := request.MultipartForm.Value["to"]; !reflect.DeepEqual(got, message.To) {
+					t.Errorf("to = %v, want %v", got, message.To)
+				}
+				if got := request.MultipartForm.Value["subject"]; !reflect.DeepEqual(got, []string{message.Subject}) {
+					t.Errorf("subject = %v, want %v", got, []string{message.Subject})
+				}
+				if got := request.MultipartForm.Value["text"]; !reflect.DeepEqual(got, []string{message.Text}) {
+					t.Errorf("text = %v, want %v", got, []string{message.Text})
+				}
+				response.WriteHeader(test.statusCode)
+				if _, err := response.Write([]byte(test.response)); err != nil {
+					t.Errorf("write response: %v", err)
+				}
+			})))
+			defer server.Close()
+
+			adapter, err := NewMailgun(validMailgunConfig())
+			if err != nil {
+				t.Fatalf("NewMailgun: %v", err)
+			}
+			productionAPI, ok := adapter.api.(mailgunV4API)
+			if !ok {
+				t.Fatalf("NewMailgun API = %T, want mailgunV4API", adapter.api)
+			}
+			productionAPI.client.SetAPIBase(server.URL + "/v3")
+
+			err = adapter.Deliver(context.Background(), message)
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("Deliver: %v (cause: %v)", err, errors.Unwrap(err))
+				}
+				return
+			}
+			if err == nil || err.Error() != test.wantError {
+				t.Fatalf("Deliver error = %v, want %q", err, test.wantError)
+			}
+		})
 	}
 }
 
