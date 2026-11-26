@@ -110,7 +110,8 @@ func NewScheduler(config SchedulerConfig) (*Scheduler, error) {
 }
 
 // Run claims all currently due rounds up to the configured limit. Any round
-// failure is returned after the scheduler attempts to release its claim.
+// failure is returned after the scheduler attempts to release the failing and
+// unprocessed claims.
 func (s *Scheduler) Run(ctx context.Context) error {
 	now := s.clock.Now().UTC()
 	if now.IsZero() {
@@ -120,15 +121,21 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("pairing claim due rounds: %w", err)
 	}
-	for _, round := range rounds {
+	for index, round := range rounds {
 		if err := s.ProcessRound(ctx, round); err != nil {
 			// A canceled processing context must not prevent best-effort claim
-			// release; repository implementations still control their own timeout.
-			releaseErr := s.rounds.ReleaseRoundClaim(context.WithoutCancel(ctx), round.Organization, round.ID)
-			if releaseErr != nil {
-				return errors.Join(err, fmt.Errorf("pairing release round claim: %w", releaseErr))
+			// releases; repository implementations still control their own timeout.
+			resultErr := err
+			releaseCtx := context.WithoutCancel(ctx)
+			for _, claimed := range rounds[index:] {
+				if releaseErr := s.rounds.ReleaseRoundClaim(releaseCtx, claimed.Organization, claimed.ID); releaseErr != nil {
+					resultErr = errors.Join(
+						resultErr,
+						fmt.Errorf("pairing release round claim %s/%d: %w", claimed.Organization, claimed.ID, releaseErr),
+					)
+				}
 			}
-			return err
+			return resultErr
 		}
 	}
 	return nil

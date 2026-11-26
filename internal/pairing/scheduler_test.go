@@ -3,6 +3,7 @@ package pairing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -128,6 +129,54 @@ func TestSchedulerFailureReleasesWithoutPersistence(t *testing.T) {
 	}
 }
 
+func TestSchedulerFailureReleasesUnprocessedClaims(t *testing.T) {
+	processingErr := errors.New("delivery failed")
+	releaseErr := errors.New("release failed")
+	tests := []struct {
+		name        string
+		releaseErrs map[string]error
+		wantRelease error
+	}{
+		{name: "cleanup succeeds"},
+		{
+			name:        "cleanup continues after release error",
+			releaseErrs: map[string]error{"second/2": releaseErr},
+			wantRelease: releaseErr,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &schedulerRepository{
+				rounds: []domain.Round{
+					{Organization: "first", ID: 1},
+					{Organization: "second", ID: 2},
+					{Organization: "third", ID: 3},
+				},
+				members:     domainMembers(t, 2),
+				releaseErrs: test.releaseErrs,
+			}
+			delivery := &recordingDelivery{failAt: 2, err: processingErr}
+			scheduler := mustScheduler(t, repository, delivery, ClockFunc(func() time.Time {
+				return time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+			}))
+
+			err := scheduler.Run(context.Background())
+			if !errors.Is(err, processingErr) {
+				t.Fatalf("Run error = %v, want processing error", err)
+			}
+			if test.wantRelease != nil && !errors.Is(err, test.wantRelease) {
+				t.Fatalf("Run error = %v, want release error", err)
+			}
+			if delivery.calls != 2 || repository.persistCalls != 1 {
+				t.Fatalf("delivery calls=%d persists=%d", delivery.calls, repository.persistCalls)
+			}
+			if want := []string{"second/2", "third/3"}; !reflect.DeepEqual(repository.released, want) {
+				t.Fatalf("released = %v, want %v", repository.released, want)
+			}
+		})
+	}
+}
+
 func TestSchedulerClaimAndReleaseErrors(t *testing.T) {
 	claimErr := errors.New("claim failed")
 	repository := &schedulerRepository{claimErr: claimErr}
@@ -189,6 +238,7 @@ type schedulerRepository struct {
 	traitErr     error
 	persistErr   error
 	releaseErr   error
+	releaseErrs  map[string]error
 	claimNow     time.Time
 	staleBefore  time.Time
 	claimLimit   int
@@ -204,7 +254,11 @@ func (repository *schedulerRepository) ClaimDueRounds(_ context.Context, now, st
 }
 
 func (repository *schedulerRepository) ReleaseRoundClaim(_ context.Context, organization string, roundID int) error {
-	repository.released = append(repository.released, organization+"/"+string(rune('0'+roundID)))
+	claim := fmt.Sprintf("%s/%d", organization, roundID)
+	repository.released = append(repository.released, claim)
+	if err := repository.releaseErrs[claim]; err != nil {
+		return err
+	}
 	return repository.releaseErr
 }
 
