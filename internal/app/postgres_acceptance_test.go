@@ -24,23 +24,18 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode"
 
 	"github.com/golang-jwt/jwt/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	postgrestest "github.com/johnamadeo/mealbot/internal/testsupport/postgres"
 )
-
-// postgresIntegrationSuiteLockKey is the ASCII string "MEALBOTT" encoded as
-// an int64. Every destructive PostgreSQL integration suite uses this stable
-// session advisory lock so package test binaries can safely share DATABASE_URL.
-const postgresIntegrationSuiteLockKey int64 = 0x4d45414c424f5454
 
 func TestPostgresVerticalAcceptance(t *testing.T) {
 	if os.Getenv("RUN_POSTGRES_INTEGRATION") != "1" {
 		t.Skip("set RUN_POSTGRES_INTEGRATION=1 with a disposable DATABASE_URL")
 	}
 	databaseURL := os.Getenv("DATABASE_URL")
-	if _, err := validatedAcceptanceDatabaseName(databaseURL); err != nil {
+	if _, err := postgrestest.ValidateDatabaseURL(databaseURL); err != nil {
 		t.Fatal(err)
 	}
 
@@ -55,7 +50,7 @@ func TestPostgresVerticalAcceptance(t *testing.T) {
 			t.Errorf("close PostgreSQL verification connection: %v", err)
 		}
 	})
-	acquireAcceptancePostgresSuiteLock(t, ctx, database)
+	postgrestest.AcquireSuiteLock(t, ctx, database)
 	if err := database.PingContext(ctx); err != nil {
 		t.Fatalf("ping PostgreSQL: %v", err)
 	}
@@ -201,35 +196,6 @@ func TestPostgresVerticalAcceptance(t *testing.T) {
 	}
 }
 
-func acquireAcceptancePostgresSuiteLock(t *testing.T, ctx context.Context, database *sql.DB) {
-	t.Helper()
-	lockContext, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	connection, err := database.Conn(lockContext)
-	if err != nil {
-		t.Fatalf("open dedicated PostgreSQL integration lock session: %v", err)
-	}
-	if _, err := connection.ExecContext(lockContext, "SELECT pg_advisory_lock($1)", postgresIntegrationSuiteLockKey); err != nil {
-		closeErr := connection.Close()
-		t.Fatalf("acquire PostgreSQL integration advisory lock: %v; close lock session: %v", err, closeErr)
-	}
-	t.Cleanup(func() {
-		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanupCancel()
-		var released bool
-		if err := connection.QueryRowContext(cleanupContext,
-			"SELECT pg_advisory_unlock($1)", postgresIntegrationSuiteLockKey,
-		).Scan(&released); err != nil {
-			t.Errorf("release PostgreSQL integration advisory lock: %v", err)
-		} else if !released {
-			t.Error("release PostgreSQL integration advisory lock: lock was not held by dedicated session")
-		}
-		if err := connection.Close(); err != nil {
-			t.Errorf("close PostgreSQL integration lock session: %v", err)
-		}
-	})
-}
-
 func newAcceptanceJWKSServer(t *testing.T, keyID string, publicKey *rsa.PublicKey) *httptest.Server {
 	t.Helper()
 	document, err := json.Marshal(map[string]any{"keys": []map[string]string{{
@@ -272,48 +238,4 @@ func acceptanceRequest(t *testing.T, client *http.Client, method, target, author
 		t.Fatalf("read %s response: %v; close response: %v", method, readErr, closeErr)
 	}
 	return response.StatusCode, responseBody
-}
-
-func validatedAcceptanceDatabaseName(raw string) (string, error) {
-	if strings.TrimSpace(raw) == "" {
-		return "", errors.New("DATABASE_URL must be a non-empty PostgreSQL URL")
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || (!strings.EqualFold(parsed.Scheme, "postgres") && !strings.EqualFold(parsed.Scheme, "postgresql")) {
-		return "", errors.New("DATABASE_URL must be a valid PostgreSQL URL")
-	}
-	if parsed.Opaque != "" || parsed.Fragment != "" || !strings.HasPrefix(parsed.Path, "/") || len(parsed.Path) == 1 {
-		return "", errors.New("DATABASE_URL must select a database in its URL path")
-	}
-	query, err := url.ParseQuery(parsed.RawQuery)
-	if err != nil {
-		return "", fmt.Errorf("DATABASE_URL has an invalid query: %w", err)
-	}
-	for key := range query {
-		if strings.EqualFold(key, "dbname") {
-			return "", errors.New("DATABASE_URL must select its database in the URL path, not a dbname query parameter")
-		}
-	}
-	databaseName := strings.TrimPrefix(parsed.Path, "/")
-	if databaseName == "" || strings.ContainsRune(databaseName, '\x00') || !hasAcceptanceTestSegment(databaseName) {
-		return "", fmt.Errorf("refusing integration test against non-test database %q", databaseName)
-	}
-	return databaseName, nil
-}
-
-func hasAcceptanceTestSegment(databaseName string) bool {
-	segmentStart := -1
-	for index, character := range databaseName {
-		if unicode.IsLetter(character) || unicode.IsNumber(character) {
-			if segmentStart == -1 {
-				segmentStart = index
-			}
-			continue
-		}
-		if segmentStart != -1 && strings.EqualFold(databaseName[segmentStart:index], "test") {
-			return true
-		}
-		segmentStart = -1
-	}
-	return segmentStart != -1 && strings.EqualFold(databaseName[segmentStart:], "test")
 }
