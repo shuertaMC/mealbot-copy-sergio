@@ -214,6 +214,7 @@ func TestNewRejectsTypedValidationFailures(t *testing.T) {
 		want   string
 	}{
 		{name: "negative port", mutate: func(values *Values) { values.Port = -1 }, want: "PORT"},
+		{name: "port above maximum", mutate: func(values *Values) { values.Port = 65536 }, want: "PORT"},
 		{name: "negative request timeout", mutate: func(values *Values) { values.RequestTimeout = -1 }, want: "REQUEST_TIMEOUT"},
 		{name: "negative jwks timeout", mutate: func(values *Values) { values.JWKSTimeout = -1 }, want: "JWKS_TIMEOUT"},
 		{name: "negative mail timeout", mutate: func(values *Values) { values.MailTimeout = -1 }, want: "MAIL_TIMEOUT"},

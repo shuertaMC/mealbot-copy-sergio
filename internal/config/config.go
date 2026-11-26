@@ -147,29 +147,29 @@ func FromLookup(lookup LookupFunc) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if port < 1 || port > 65535 {
-		return Config{}, errors.New("config: PORT must be between 1 and 65535")
+	if err := validatePort(port); err != nil {
+		return Config{}, err
 	}
 	requestTimeout, err := parseDuration(lookup, "REQUEST_TIMEOUT", defaultRequestTimeout)
 	if err != nil {
 		return Config{}, err
 	}
-	if requestTimeout <= 0 {
-		return Config{}, errors.New("config: REQUEST_TIMEOUT must be positive")
+	if err := validatePositiveDuration("REQUEST_TIMEOUT", requestTimeout); err != nil {
+		return Config{}, err
 	}
 	jwksTimeout, err := parseDuration(lookup, "JWKS_TIMEOUT", defaultJWKSTimeout)
 	if err != nil {
 		return Config{}, err
 	}
-	if jwksTimeout <= 0 {
-		return Config{}, errors.New("config: JWKS_TIMEOUT must be positive")
+	if err := validatePositiveDuration("JWKS_TIMEOUT", jwksTimeout); err != nil {
+		return Config{}, err
 	}
 	mailTimeout, err := parseDuration(lookup, "MAIL_TIMEOUT", defaultMailTimeout)
 	if err != nil {
 		return Config{}, err
 	}
-	if mailTimeout <= 0 {
-		return Config{}, errors.New("config: MAIL_TIMEOUT must be positive")
+	if err := validatePositiveDuration("MAIL_TIMEOUT", mailTimeout); err != nil {
+		return Config{}, err
 	}
 
 	mode := Mode(valueOrDefault(lookup, "APP_ENV", string(Development)))
@@ -279,20 +279,20 @@ func validateValues(values Values) error {
 	if values.Mode != Development && values.Mode != Production {
 		return fmt.Errorf("config: APP_ENV must be %q or %q", Development, Production)
 	}
-	if values.Port < 1 || values.Port > 65535 {
-		return fmt.Errorf("config: PORT must be between 1 and 65535")
+	if err := validatePort(values.Port); err != nil {
+		return err
 	}
 	if values.StaticDir == "" {
 		return errors.New("config: STATIC_DIR must not be empty")
 	}
-	if values.RequestTimeout <= 0 {
-		return errors.New("config: REQUEST_TIMEOUT must be positive")
+	if err := validatePositiveDuration("REQUEST_TIMEOUT", values.RequestTimeout); err != nil {
+		return err
 	}
-	if values.JWKSTimeout <= 0 {
-		return errors.New("config: JWKS_TIMEOUT must be positive")
+	if err := validatePositiveDuration("JWKS_TIMEOUT", values.JWKSTimeout); err != nil {
+		return err
 	}
-	if values.MailTimeout <= 0 {
-		return errors.New("config: MAIL_TIMEOUT must be positive")
+	if err := validatePositiveDuration("MAIL_TIMEOUT", values.MailTimeout); err != nil {
+		return err
 	}
 	if err := validateDatabase(values); err != nil {
 		return err
@@ -317,6 +317,20 @@ func validateValues(values Values) error {
 	}
 	if values.Mode == Production {
 		return validateProduction(values)
+	}
+	return nil
+}
+
+func validatePort(port int) error {
+	if port < 1 || port > 65535 {
+		return errors.New("config: PORT must be between 1 and 65535")
+	}
+	return nil
+}
+
+func validatePositiveDuration(name string, value time.Duration) error {
+	if value <= 0 {
+		return fmt.Errorf("config: %s must be positive", name)
 	}
 	return nil
 }
