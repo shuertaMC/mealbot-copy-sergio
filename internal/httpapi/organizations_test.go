@@ -58,7 +58,7 @@ func TestOrganizationServiceValidationOrderingAndClearing(t *testing.T) {
 	if err := service.SetCrossMatchTrait(context.Background(), " org ", &trait); err != nil {
 		t.Fatal(err)
 	}
-	if repository.updatedOrg != "org" || repository.updatedTrait == nil || *repository.updatedTrait != "college" {
+	if repository.updatedOrg != "org" || repository.updatedTrait == nil || *repository.updatedTrait != " college " {
 		t.Fatalf("update = %q, %#v", repository.updatedOrg, repository.updatedTrait)
 	}
 	if err := service.SetCrossMatchTrait(context.Background(), "org", nil); err != nil {
@@ -70,9 +70,13 @@ func TestOrganizationServiceValidationOrderingAndClearing(t *testing.T) {
 	if err := service.Create(context.Background(), " ", "admin"); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("create error = %v", err)
 	}
-	empty := " "
-	if err := service.SetCrossMatchTrait(context.Background(), "org", &empty); !errors.Is(err, domain.ErrValidation) {
-		t.Fatalf("trait error = %v", err)
+	repository.updatedTrait = &trait
+	empty := ""
+	if err := service.SetCrossMatchTrait(context.Background(), "org", &empty); err != nil {
+		t.Fatal(err)
+	}
+	if repository.updatedTrait != nil {
+		t.Fatalf("empty trait = %#v; want cleared", repository.updatedTrait)
 	}
 }
 
@@ -192,7 +196,7 @@ func TestCrossMatchTraitHandlerSetClearAndErrors(t *testing.T) {
 		set    *string
 		want   string
 	}{
-		{name: "set", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":" college "}`, status: 201, set: stringPointer("college"), want: traitUpdatedText},
+		{name: "set", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":" college "}`, status: 201, set: stringPointer(" college "), want: traitUpdatedText},
 		{name: "clear", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":null}`, status: 201, want: traitUpdatedText},
 		{name: "not found", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":"college"}`, err: domain.NewNotFoundError("org", "alpha"), status: 404, want: "{\"error\":\"not found\"}\n"},
 		{name: "method", method: http.MethodGet, url: "/crossmatchtrait?org=alpha", status: 405, want: "{\"error\":\"method not allowed\"}\n"},
@@ -200,7 +204,7 @@ func TestCrossMatchTraitHandlerSetClearAndErrors(t *testing.T) {
 		{name: "repeated query", method: http.MethodPost, url: "/crossmatchtrait?org=a&org=b", body: `{"trait":"college"}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
 		{name: "empty query", method: http.MethodPost, url: "/crossmatchtrait?org=", body: `{"trait":"college"}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
 		{name: "missing trait", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
-		{name: "empty trait", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":" "}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
+		{name: "empty trait clears", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":""}`, status: 201, want: traitUpdatedText},
 		{name: "wrong trait type", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":4}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
 		{name: "unknown field", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":"x","other":1}`, status: 400, want: "{\"error\":\"invalid request\"}\n"},
 		{name: "internal", method: http.MethodPost, url: "/crossmatchtrait?org=alpha", body: `{"trait":"x"}`, err: errors.New("sql details"), status: 500, want: "{\"error\":\"internal server error\"}\n"},

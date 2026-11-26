@@ -70,18 +70,14 @@ func (s *OrganizationService) Create(ctx context.Context, name, admin string) er
 	return s.repository.CreateOrganization(ctx, organization)
 }
 
-// SetCrossMatchTrait sets a non-blank trait, or clears it when trait is nil.
+// SetCrossMatchTrait sets a trait, or clears it when trait is nil or empty.
 func (s *OrganizationService) SetCrossMatchTrait(ctx context.Context, organization string, trait *string) error {
 	organization = strings.TrimSpace(organization)
 	if organization == "" {
 		return domain.NewValidationError("organization.name", "must not be empty")
 	}
-	if trait != nil {
-		trimmed := strings.TrimSpace(*trait)
-		if trimmed == "" {
-			return domain.NewValidationError("organization.crossMatchTrait", "must not be empty when set")
-		}
-		trait = &trimmed
+	if trait != nil && *trait == "" {
+		trait = nil
 	}
 	return s.repository.UpdateCrossMatchTrait(ctx, organization, trait)
 }
@@ -149,8 +145,9 @@ func NewCreateOrganizationHandler(service OrganizationUseCases, maxBodyBytes int
 }
 
 // NewCrossMatchTraitHandler constructs authenticated-route behavior for
-// POST /crossmatchtrait?org=. JSON null clears the stored trait; a string sets
-// it, while a missing, empty, or differently typed trait is invalid.
+// POST /crossmatchtrait?org=. JSON null or an empty string clears the stored
+// trait; a non-empty string sets it, while a missing or differently typed trait
+// is invalid.
 func NewCrossMatchTraitHandler(service OrganizationUseCases, maxBodyBytes int64, logger *slog.Logger) http.Handler {
 	responses := newResponder(logger)
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -192,9 +189,8 @@ func decodeNullableTrait(raw json.RawMessage) (*string, error) {
 	if err := json.Unmarshal(raw, &trait); err != nil {
 		return nil, domain.NewValidationError("trait", "must be a string or null")
 	}
-	trait = strings.TrimSpace(trait)
 	if trait == "" {
-		return nil, domain.NewValidationError("trait", "must not be empty when set")
+		return nil, nil
 	}
 	return &trait, nil
 }

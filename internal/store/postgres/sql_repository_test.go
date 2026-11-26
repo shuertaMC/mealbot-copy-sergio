@@ -412,10 +412,6 @@ func TestRepositoryValidationAndErrorPaths(t *testing.T) {
 	if _, err := repository.CrossMatchTrait(ctx, " "); !domain.IsValidation(err) {
 		t.Fatalf("empty trait organization = %v", err)
 	}
-	emptyTrait := " "
-	if err := repository.UpdateCrossMatchTrait(ctx, "org", &emptyTrait); !domain.IsValidation(err) {
-		t.Fatalf("empty update trait = %v", err)
-	}
 	if _, err := repository.ListMembers(ctx, " ", false); !domain.IsValidation(err) {
 		t.Fatalf("empty member organization = %v", err)
 	}
