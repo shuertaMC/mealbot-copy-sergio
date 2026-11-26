@@ -14,37 +14,25 @@ func (r *Repository) ListOrganizations(ctx context.Context, admin string) ([]dom
 	if admin == "" {
 		return nil, domain.NewValidationError("organization.admin", "must not be empty")
 	}
-	rows, err := r.db.QueryContext(ctx, `
+	return r.queryOrganizations(ctx, "list organizations", `
 		SELECT name, admin, cross_match_trait
 		FROM organizations WHERE admin = $1 ORDER BY name`, admin)
-	if err != nil {
-		return nil, mapDatabaseError("list organizations", err)
-	}
-	defer rows.Close()
-
-	organizations := make([]domain.Organization, 0)
-	for rows.Next() {
-		organization, err := scanOrganization(rows)
-		if err != nil {
-			return nil, err
-		}
-		organizations = append(organizations, organization)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, mapDatabaseError("list organizations", err)
-	}
-	return organizations, nil
 }
 
 // ListAllOrganizations returns every organization in stable name order. It is
 // used by administrative history reconstruction rather than HTTP filtering.
 func (r *Repository) ListAllOrganizations(ctx context.Context) ([]domain.Organization, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	return r.queryOrganizations(ctx, "list all organizations", `
 		SELECT name, admin, cross_match_trait FROM organizations ORDER BY name`)
+}
+
+func (r *Repository) queryOrganizations(ctx context.Context, operation, query string, args ...any) ([]domain.Organization, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, mapDatabaseError("list all organizations", err)
+		return nil, mapDatabaseError(operation, err)
 	}
 	defer rows.Close()
+
 	organizations := make([]domain.Organization, 0)
 	for rows.Next() {
 		organization, err := scanOrganization(rows)
@@ -54,7 +42,7 @@ func (r *Repository) ListAllOrganizations(ctx context.Context) ([]domain.Organiz
 		organizations = append(organizations, organization)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, mapDatabaseError("list all organizations", err)
+		return nil, mapDatabaseError(operation, err)
 	}
 	return organizations, nil
 }

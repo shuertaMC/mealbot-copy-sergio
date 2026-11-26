@@ -22,13 +22,16 @@ func TestOrganizationRepositoryMethods(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"name", "admin", "cross_match_trait"}).
 		AddRow("alpha", "admin@example.test", nil).
 		AddRow("beta", "admin@example.test", "team")
-	mock.ExpectQuery("SELECT name, admin, cross_match_trait").WithArgs("admin@example.test").WillReturnRows(rows)
+	mock.ExpectQuery("SELECT name, admin, cross_match_trait").WithArgs("admin@example.test").
+		WillReturnRows(rows).
+		RowsWillBeClosed()
 	organizations, err := repository.ListOrganizations(ctx, " admin@example.test ")
 	if err != nil || len(organizations) != 2 || organizations[1].CrossMatchTrait == nil {
 		t.Fatalf("ListOrganizations = %#v, %v", organizations, err)
 	}
 	mock.ExpectQuery("SELECT name, admin, cross_match_trait FROM organizations ORDER BY name").
-		WillReturnRows(sqlmock.NewRows([]string{"name", "admin", "cross_match_trait"}).AddRow("alpha", "admin@example.test", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"name", "admin", "cross_match_trait"}).AddRow("alpha", "admin@example.test", nil)).
+		RowsWillBeClosed()
 	all, err := repository.ListAllOrganizations(ctx)
 	if err != nil || len(all) != 1 {
 		t.Fatalf("ListAllOrganizations = %#v, %v", all, err)
@@ -728,6 +731,13 @@ func TestRowsErrorIsPropagated(t *testing.T) {
 	mock.ExpectQuery("SELECT name, admin, cross_match_trait").WithArgs("admin").WillReturnRows(rows)
 	if _, err := repository.ListOrganizations(context.Background(), "admin"); !errors.Is(err, rowErr) {
 		t.Fatalf("ListOrganizations rows error = %v", err)
+	}
+	allRows := sqlmock.NewRows([]string{"name", "admin", "cross_match_trait"}).
+		AddRow("alpha", "admin", nil).
+		RowError(0, rowErr)
+	mock.ExpectQuery("SELECT name, admin, cross_match_trait FROM organizations ORDER BY name").WillReturnRows(allRows)
+	if _, err := repository.ListAllOrganizations(context.Background()); !errors.Is(err, rowErr) {
+		t.Fatalf("ListAllOrganizations rows error = %v", err)
 	}
 	pairRows := sqlmock.NewRows([]string{"organization", "id", "scheduled_date", "done", "id1", "id2", "extra_id"}).
 		AddRow("org", 0, time.Now().UTC(), true, nil, nil, nil).
