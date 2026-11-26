@@ -177,6 +177,8 @@ func TestFromMapRejectsInvalidValues(t *testing.T) {
 		{name: "mixed database", changes: map[string]string{"DB_USER": "local", "DB_NAME": "mealbot"}, want: "not both"},
 		{name: "relative database URL", changes: map[string]string{"DATABASE_URL": "localhost/mealbot"}, want: "absolute PostgreSQL URL"},
 		{name: "database scheme", changes: map[string]string{"DATABASE_URL": "mysql://db.example.test/mealbot"}, want: "postgres or postgresql"},
+		{name: "database URL without database path", changes: map[string]string{"DATABASE_URL": "postgresql://db.example.test"}, want: "must select a database"},
+		{name: "database URL root path", changes: map[string]string{"DATABASE_URL": "postgresql://db.example.test/"}, want: "must select a database"},
 		{name: "issuer URL", changes: map[string]string{"AUTH0_ISSUER": "tenant.example.test"}, want: "AUTH0_ISSUER must be"},
 		{name: "issuer fragment", changes: map[string]string{"AUTH0_ISSUER": "https://tenant.example.test/#fragment"}, want: "must not contain"},
 		{name: "jwks URL", changes: map[string]string{"AUTH0_JWKS_URL": "file:///keys.json"}, want: "AUTH0_JWKS_URL must be"},

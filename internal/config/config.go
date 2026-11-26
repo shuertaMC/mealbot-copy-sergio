@@ -341,6 +341,9 @@ func validateDatabase(values Values) error {
 	if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
 		return errors.New("config: DATABASE_URL must use postgres or postgresql scheme")
 	}
+	if parsed.Path == "" || parsed.Path == "/" {
+		return errors.New("config: DATABASE_URL must select a database in its URL path")
+	}
 	return nil
 }
 

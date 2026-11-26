@@ -64,7 +64,7 @@ Configuration is read once at process startup. Durations use Go syntax such as `
 | --- | --- | --- |
 | `APP_ENV` | `development` | `development` or `production`. Production requires all Auth0 and Mailgun values. |
 | `PORT` | `8080` | TCP port from 1 through 65535. |
-| `DATABASE_URL` | none | Absolute `postgres://` or `postgresql://` URL; mutually exclusive with local database fields. |
+| `DATABASE_URL` | none | Absolute `postgres://` or `postgresql://` URL that selects a database in its path; mutually exclusive with local database fields. |
 | `DB_USER` | none | Local PostgreSQL role; required with `DB_NAME` when `DATABASE_URL` is absent. |
 | `DB_NAME` | none | Local PostgreSQL database; required with `DB_USER` when `DATABASE_URL` is absent. |
 | `AUTH0_ISSUER` | `https://mealbot.auth0.com/` in development | Absolute HTTP(S) JWT issuer URL. Set together with `AUTH0_AUDIENCE` and `AUTH0_JWKS_URL` when overriding the development group. |
