@@ -18,10 +18,8 @@ type KeySource interface {
 // Validator verifies RS256 signatures and the configured issuer and audience.
 // Validator is safe for concurrent use when its KeySource is safe.
 type Validator struct {
-	issuer   string
-	audience string
-	keys     KeySource
-	parser   *jwt.Parser
+	keys   KeySource
+	parser *jwt.Parser
 }
 
 // NewValidator constructs a Validator. Issuer and audience are required, as
@@ -40,9 +38,7 @@ func NewValidator(issuer, audience string, keys KeySource) (*Validator, error) {
 	}
 
 	return &Validator{
-		issuer:   issuer,
-		audience: audience,
-		keys:     keys,
+		keys: keys,
 		parser: jwt.NewParser(
 			jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Alg()}),
 			jwt.WithIssuer(issuer),
