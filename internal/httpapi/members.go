@@ -163,7 +163,7 @@ func ParseMembersCSV(source io.Reader, organization string, maxBytes int64) ([]d
 		}
 		emailKey := strings.ToLower(member.Email)
 		if _, duplicate := emails[emailKey]; duplicate {
-			return nil, domain.NewConflictError("members", "duplicate member email", nil)
+			return nil, domain.NewValidationError("members", "duplicate member email")
 		}
 		emails[emailKey] = struct{}{}
 		members = append(members, member)

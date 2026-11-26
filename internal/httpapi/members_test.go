@@ -54,7 +54,7 @@ func TestParseMembersCSVRejectsInvalidInputs(t *testing.T) {
 		{name: "blank name", input: "name,email\n ,a@example.com\n", kind: domain.ErrValidation},
 		{name: "blank email", input: "name,email\nAmy, \n", kind: domain.ErrValidation},
 		{name: "invalid email", input: "name,email\nAmy,not-an-email\n", kind: domain.ErrValidation},
-		{name: "duplicate email", input: "name,email\nAmy,A@example.com\nAnn,a@example.com\n", kind: domain.ErrConflict},
+		{name: "duplicate email", input: "name,email\nAmy,A@example.com\nAnn,a@example.com\n", kind: domain.ErrValidation},
 		{name: "malformed quote", input: "name,email\n\"Amy,a@example.com\n", kind: domain.ErrValidation},
 		{name: "oversized", input: "name,email\nAmy,a@example.com\n", limit: 3, kind: domain.ErrValidation},
 	}
@@ -297,22 +297,35 @@ func TestMembersHandlerPostQueryValidation(t *testing.T) {
 
 func TestMembersHandlerRejectsMalformedCSVBeforeReconciliation(t *testing.T) {
 	t.Parallel()
-	repository := &fakeMemberRepository{}
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	part, err := writer.CreateFormFile("members", "ignored.csv")
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "malformed quote", input: "name,email\n\"unterminated,a@example.com\n"},
+		{name: "duplicate email case insensitive", input: "name,email\nAmy,A@example.com\nAnn,a@example.com\n"},
 	}
-	_, _ = part.Write([]byte("name,email\n\"unterminated,a@example.com\n"))
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodPost, "/members?org=alpha", &body)
-	request.Header.Set("Content-Type", writer.FormDataContentType())
-	response := httptest.NewRecorder()
-	NewMembersHandler(NewMemberService(repository), 4096, testLogger()).ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest || repository.reconcileCall != 0 {
-		t.Fatalf("status=%d body=%q reconciliation calls=%d", response.Code, response.Body.String(), repository.reconcileCall)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			repository := &fakeMemberRepository{}
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			part, err := writer.CreateFormFile("members", "ignored.csv")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = part.Write([]byte(test.input))
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/members?org=alpha", &body)
+			request.Header.Set("Content-Type", writer.FormDataContentType())
+			response := httptest.NewRecorder()
+			NewMembersHandler(NewMemberService(repository), 4096, testLogger()).ServeHTTP(response, request)
+			assertHTTPResponse(t, response, http.StatusBadRequest, "{\"error\":\"invalid request\"}\n", "application/json; charset=utf-8")
+			if repository.reconcileCall != 0 {
+				t.Fatalf("reconciliation calls = %d; want 0", repository.reconcileCall)
+			}
+		})
 	}
 }
