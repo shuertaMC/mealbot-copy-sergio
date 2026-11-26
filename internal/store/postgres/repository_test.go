@@ -147,6 +147,65 @@ func TestMakeHistoriesSymmetric(t *testing.T) {
 	}
 }
 
+func TestUpdatePairHistory(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		pair    domain.Pair
+		roundID int
+		want    map[string]map[string]int
+	}{
+		{
+			name:    "pair",
+			pair:    domain.Pair{ID1: "a@example.test", ID2: "b@example.test"},
+			roundID: 4,
+			want: map[string]map[string]int{
+				"a@example.test": {"b@example.test": 4, "legacy@example.test": 1},
+				"b@example.test": {"a@example.test": 4, "legacy@example.test": 2},
+				"c@example.test": {"d@example.test": 3},
+				"d@example.test": {"c@example.test": 3},
+			},
+		},
+		{
+			name: "triple",
+			pair: domain.Pair{
+				ID1:     "a@example.test",
+				ID2:     "b@example.test",
+				ExtraID: "c@example.test",
+			},
+			roundID: 7,
+			want: map[string]map[string]int{
+				"a@example.test": {"b@example.test": 7, "c@example.test": 7, "legacy@example.test": 1},
+				"b@example.test": {"a@example.test": 7, "c@example.test": 7, "legacy@example.test": 2},
+				"c@example.test": {"a@example.test": 7, "b@example.test": 7, "d@example.test": 3},
+				"d@example.test": {"c@example.test": 3},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			members := map[string]domain.Member{
+				"a@example.test": {Email: "a@example.test", LastRoundWith: map[string]int{"legacy@example.test": 1}},
+				"b@example.test": {Email: "b@example.test", LastRoundWith: map[string]int{"legacy@example.test": 2}},
+				"c@example.test": {Email: "c@example.test", LastRoundWith: map[string]int{"d@example.test": 3}},
+				"d@example.test": {Email: "d@example.test", LastRoundWith: map[string]int{"c@example.test": 3}},
+			}
+
+			updatePairHistory(members, test.pair, test.roundID)
+
+			for email, member := range members {
+				if !reflect.DeepEqual(member.LastRoundWith, test.want[email]) {
+					t.Errorf("%s history = %#v, want %#v", email, member.LastRoundWith, test.want[email])
+				}
+				if _, self := member.LastRoundWith[email]; self {
+					t.Errorf("%s history contains a self edge: %#v", email, member.LastRoundWith)
+				}
+			}
+		})
+	}
+}
+
 func TestMigrationEntries(t *testing.T) {
 	t.Parallel()
 	entries, err := migrationEntries()

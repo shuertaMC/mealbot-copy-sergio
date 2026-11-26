@@ -187,17 +187,7 @@ func (r *Repository) PersistPairings(ctx context.Context, organization string, r
 		); err != nil {
 			return rollback(tx, mapDatabaseError("insert pair", err))
 		}
-		ids := pair.Members()
-		for leftIndex, leftID := range ids {
-			for _, rightID := range ids[leftIndex+1:] {
-				left := members[leftID]
-				right := members[rightID]
-				left.LastRoundWith[rightID] = roundID
-				right.LastRoundWith[leftID] = roundID
-				members[leftID] = left
-				members[rightID] = right
-			}
-		}
+		updatePairHistory(members, pair, roundID)
 	}
 	for _, email := range sortedDomainMemberKeys(members) {
 		if _, changed := seenMembers[email]; !changed {
@@ -324,16 +314,7 @@ func reconstructOrganizationHistoryTx(ctx context.Context, tx *sql.Tx, organizat
 				return missingPairMember(organization, item.round, email)
 			}
 		}
-		for leftIndex, leftID := range ids {
-			for _, rightID := range ids[leftIndex+1:] {
-				left := members[leftID]
-				right := members[rightID]
-				left.LastRoundWith[rightID] = item.round
-				right.LastRoundWith[leftID] = item.round
-				members[leftID] = left
-				members[rightID] = right
-			}
-		}
+		updatePairHistory(members, item.pair, item.round)
 	}
 	for _, email := range sortedDomainMemberKeys(members) {
 		history, err := encodeHistory(members[email].LastRoundWith)
@@ -348,6 +329,20 @@ func reconstructOrganizationHistoryTx(ctx context.Context, tx *sql.Tx, organizat
 		}
 	}
 	return nil
+}
+
+func updatePairHistory(members map[string]domain.Member, pair domain.Pair, roundID int) {
+	ids := pair.Members()
+	for leftIndex, leftID := range ids {
+		for _, rightID := range ids[leftIndex+1:] {
+			left := members[leftID]
+			right := members[rightID]
+			left.LastRoundWith[rightID] = roundID
+			right.LastRoundWith[leftID] = roundID
+			members[leftID] = left
+			members[rightID] = right
+		}
+	}
 }
 
 func loadMembersForUpdate(ctx context.Context, tx *sql.Tx, organization string) (map[string]domain.Member, error) {
