@@ -13,11 +13,16 @@ import (
 )
 
 type fakeRoundRepository struct {
-	rounds      []domain.Round
-	added       time.Time
-	rescheduled time.Time
-	removed     int
-	err         error
+	rounds                  []domain.Round
+	added                   time.Time
+	rescheduledOrganization string
+	rescheduledID           int
+	rescheduledAt           time.Time
+	rescheduleCalls         int
+	deletedOrganization     string
+	deletedID               int
+	deleteCalls             int
+	err                     error
 }
 
 func (f *fakeRoundRepository) ListRounds(context.Context, string) ([]domain.Round, error) {
@@ -27,12 +32,14 @@ func (f *fakeRoundRepository) AddRound(_ context.Context, organization string, a
 	f.added = at
 	return domain.Round{Organization: organization, ScheduledAt: at}, f.err
 }
-func (f *fakeRoundRepository) RescheduleRound(_ context.Context, _ string, id int, at time.Time) error {
-	f.removed, f.rescheduled = id, at
+func (f *fakeRoundRepository) RescheduleRound(_ context.Context, organization string, id int, at time.Time) error {
+	f.rescheduledOrganization, f.rescheduledID, f.rescheduledAt = organization, id, at
+	f.rescheduleCalls++
 	return f.err
 }
-func (f *fakeRoundRepository) DeleteRound(_ context.Context, _ string, id int) error {
-	f.removed = id
+func (f *fakeRoundRepository) DeleteRound(_ context.Context, organization string, id int) error {
+	f.deletedOrganization, f.deletedID = organization, id
+	f.deleteCalls++
 	return f.err
 }
 
@@ -61,6 +68,69 @@ func TestParseRoundTimestampAndServiceNormalization(t *testing.T) {
 	}
 	if err := service.Remove(context.Background(), "org", -1); !domain.IsValidation(err) {
 		t.Fatalf("negative Remove() = %v", err)
+	}
+}
+
+func TestRoundServiceMutationForwarding(t *testing.T) {
+	tests := []struct {
+		name           string
+		invoke         func(*RoundService) error
+		wantValidation bool
+		assertCalls    func(*testing.T, *fakeRoundRepository)
+	}{
+		{
+			name: "reschedule forwards normalized arguments",
+			invoke: func(service *RoundService) error {
+				return service.Reschedule(context.Background(), " org ", 2, "2026-10-02T03:04:05.987-04:00")
+			},
+			assertCalls: func(t *testing.T, repository *fakeRoundRepository) {
+				t.Helper()
+				wantTime := time.Date(2026, 10, 2, 7, 4, 5, 0, time.UTC)
+				if repository.rescheduleCalls != 1 || repository.rescheduledOrganization != "org" || repository.rescheduledID != 2 || repository.rescheduledAt != wantTime {
+					t.Fatalf("RescheduleRound calls = %d, organization %q, id %d, time %v; want 1, %q, 2, %v", repository.rescheduleCalls, repository.rescheduledOrganization, repository.rescheduledID, repository.rescheduledAt, "org", wantTime)
+				}
+			},
+		},
+		{
+			name: "remove forwards normalized arguments",
+			invoke: func(service *RoundService) error {
+				return service.Remove(context.Background(), " org ", 2)
+			},
+			assertCalls: func(t *testing.T, repository *fakeRoundRepository) {
+				t.Helper()
+				if repository.deleteCalls != 1 || repository.deletedOrganization != "org" || repository.deletedID != 2 {
+					t.Fatalf("DeleteRound calls = %d, organization %q, id %d; want 1, %q, 2", repository.deleteCalls, repository.deletedOrganization, repository.deletedID, "org")
+				}
+			},
+		},
+		{
+			name: "malformed reschedule stops before repository",
+			invoke: func(service *RoundService) error {
+				return service.Reschedule(context.Background(), "org", 2, "Friday")
+			},
+			wantValidation: true,
+			assertCalls: func(t *testing.T, repository *fakeRoundRepository) {
+				t.Helper()
+				if repository.rescheduleCalls != 0 {
+					t.Fatalf("RescheduleRound calls = %d; want 0", repository.rescheduleCalls)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &fakeRoundRepository{}
+			err := test.invoke(NewRoundService(repository))
+			if test.wantValidation {
+				if !domain.IsValidation(err) {
+					t.Fatalf("service error = %v; want validation error", err)
+				}
+			} else if err != nil {
+				t.Fatalf("service error = %v; want nil", err)
+			}
+			test.assertCalls(t, repository)
+		})
 	}
 }
 
