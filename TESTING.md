@@ -25,7 +25,10 @@ go tool cover -func=coverage.out | tail -n 1   # aggregate "total:" line
 
 ## PostgreSQL integration suite (opt-in)
 
-These tests are compiled only with the `integration` build tag and additionally skip unless `RUN_POSTGRES_INTEGRATION=1` is set.
+The gate has two parts, and the command below sets both:
+
+- `RUN_POSTGRES_INTEGRATION=1`: the PostgreSQL tests skip unless it is set. This is the only gate on the repository tests in `internal/store/postgres`, which have no build tag.
+- `-tags=integration`: required to compile the live authenticated HTTP acceptance test in `internal/app` (`postgres_acceptance_test.go`), which also needs the environment variable.
 
 Prerequisites:
 
