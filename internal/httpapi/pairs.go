@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -10,11 +9,10 @@ import (
 	"github.com/johnamadeo/mealbot/internal/domain"
 )
 
-// PairHistoryRepository is the persistence surface used to resolve pair
-// history. ListMembers must include inactive members when activeOnly is false.
+// PairHistoryRepository is the persistence surface used to load pair history
+// with all stored member references already resolved.
 type PairHistoryRepository interface {
-	ListPairs(context.Context, string) ([]domain.Round, error)
-	ListMembers(context.Context, string, bool) ([]domain.Member, error)
+	ListHistoricalPairs(context.Context, string) ([]domain.HistoricalRound, error)
 }
 
 // PairHistoryUseCases is the narrow handler-facing history contract.
@@ -22,7 +20,7 @@ type PairHistoryUseCases interface {
 	ListHistory(context.Context, string) (GetPairsResponse, error)
 }
 
-// PairHistoryService resolves persisted member IDs into historical members.
+// PairHistoryService maps resolved historical members into transport values.
 type PairHistoryService struct{ repository PairHistoryRepository }
 
 // NewPairHistoryService constructs history use cases over repository.
@@ -52,43 +50,24 @@ type GetPairsResponse struct {
 	RoundPairs [][]GetPairsResponsePair `json:"roundPairs"`
 }
 
-// ListHistory includes inactive members and fails on dangling member IDs.
+// ListHistory preserves resolved inactive members and repository integrity
+// errors while mapping provider-neutral history to the legacy response shape.
 func (s *PairHistoryService) ListHistory(ctx context.Context, organization string) (GetPairsResponse, error) {
 	organization = strings.TrimSpace(organization)
 	if organization == "" {
 		return GetPairsResponse{}, domain.NewValidationError("pair.organization", "must not be empty")
 	}
-	rounds, err := s.repository.ListPairs(ctx, organization)
+	rounds, err := s.repository.ListHistoricalPairs(ctx, organization)
 	if err != nil {
 		return GetPairsResponse{}, err
-	}
-	members, err := s.repository.ListMembers(ctx, organization, false)
-	if err != nil {
-		return GetPairsResponse{}, err
-	}
-	byEmail := make(map[string]domain.Member, len(members))
-	for _, member := range members {
-		byEmail[member.Email] = member
 	}
 	result := GetPairsResponse{RoundPairs: make([][]GetPairsResponsePair, 0, len(rounds))}
 	for _, round := range rounds {
 		group := make([]GetPairsResponsePair, 0, len(round.Pairs))
 		for _, pair := range round.Pairs {
-			member1, err := historicalMember(byEmail, organization, round.ID, pair.ID1)
-			if err != nil {
-				return GetPairsResponse{}, err
-			}
-			member2, err := historicalMember(byEmail, organization, round.ID, pair.ID2)
-			if err != nil {
-				return GetPairsResponse{}, err
-			}
-			resolved := GetPairsResponsePair{Member1: pairMember(member1), Member2: pairMember(member2)}
-			if pair.ExtraID != "" {
-				extra, err := historicalMember(byEmail, organization, round.ID, pair.ExtraID)
-				if err != nil {
-					return GetPairsResponse{}, err
-				}
-				resolved.ExtraMember = pairMember(extra)
+			resolved := GetPairsResponsePair{Member1: pairMember(pair.Member1), Member2: pairMember(pair.Member2)}
+			if pair.ExtraMember != nil {
+				resolved.ExtraMember = pairMember(*pair.ExtraMember)
 			}
 			group = append(group, resolved)
 		}
@@ -117,14 +96,6 @@ func NewPairsHandler(service PairHistoryUseCases, logger *slog.Logger) http.Hand
 		}
 		responses.json(w, http.StatusOK, result)
 	})
-}
-
-func historicalMember(members map[string]domain.Member, organization string, roundID int, email string) (domain.Member, error) {
-	member, ok := members[email]
-	if !ok {
-		return domain.Member{}, domain.NewIntegrityError("pair history", fmt.Sprintf("organization %q round %d references missing member %q", organization, roundID, email), nil)
-	}
-	return member, nil
 }
 
 func pairMember(member domain.Member) PairMemberResponse {

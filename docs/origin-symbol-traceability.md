@@ -94,7 +94,7 @@ This is the deletion record for every original first-party symbol named by the b
 | `createMembersFromCSV` | `httpapi.ParseMembersCSV` | `TestParseMembersCSVValidMetadataNormalizedHeadersAndHistories`; `TestParseMembersCSVRejectsInvalidInputs` |
 | `saveMembersInDB` | transactional `Repository.ReconcileMembers` | `TestListAndReconcileMembers`; `TestPostgresRepositoryIntegration` |
 | `getActiveMembersFromDBAsMap` | `MemberService.Get`, `Repository.ListMembers(..., true)` | `TestMemberServiceGetDeterministicOrderingAndNullableTrait`; `TestListAndReconcileMembers` |
-| `getActiveMembersFromDBInPairFormat` | `Repository.ListMembers`; historical reads explicitly use `activeOnly=false` | `TestPairHistoryResolvesInactivePairsAndTriples`; `TestListHistoricalPairsIncludesInactiveMembers` |
+| `getActiveMembersFromDBInPairFormat` | `Repository.ListHistoricalPairs`, which reads members with `activeOnly=false` | `TestListHistoricalPairsIncludesInactiveMembers` |
 | `GetMembersFromDB` | `Repository.ListMembers` | `TestListAndReconcileMembers`; `TestRowsErrorIsPropagated` |
 
 ## `rounds.go`
@@ -149,10 +149,10 @@ This is the deletion record for every original first-party symbol named by the b
 
 | Original | Exact replacement | Direct behavior test |
 | --- | --- | --- |
-| `GetPairsResponsePair` | `httpapi.GetPairsResponsePair` | `TestPairHistoryResolvesInactivePairsAndTriples` |
+| `GetPairsResponsePair` | `httpapi.GetPairsResponsePair` | `TestPairHistoryMapsResolvedInactivePairsAndTriples` |
 | `GetPairsResponse` | `httpapi.GetPairsResponse` | `TestPairsHandlerContracts` |
 | `GetPairsHandler` | `httpapi.NewPairsHandler` | `TestPairsHandlerContracts` |
-| `getPairsFromDB` | `Repository.ListPairs` plus `PairHistoryService.ListHistory` | `TestListHistoricalPairsIncludesInactiveMembers`; `TestHistoricalMissingMemberIsIntegrityError`; `TestPairHistoryResolvesInactivePairsAndTriples` |
+| `getPairsFromDB` | `Repository.ListHistoricalPairs` plus `PairHistoryService.ListHistory` | `TestListHistoricalPairsIncludesInactiveMembers`; `TestHistoricalMissingMemberIsIntegrityError`; `TestPairHistoryMapsResolvedInactivePairsAndTriples` |
 
 ## `migration.go`
 

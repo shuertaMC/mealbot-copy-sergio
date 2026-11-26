@@ -15,40 +15,42 @@ import (
 )
 
 type fakePairHistoryRepository struct {
-	rounds  []domain.Round
-	members []domain.Member
-	err     error
+	history      []domain.HistoricalRound
+	err          error
+	organization string
+	calls        int
 }
 
-func (f *fakePairHistoryRepository) ListPairs(context.Context, string) ([]domain.Round, error) {
-	return f.rounds, f.err
-}
-func (f *fakePairHistoryRepository) ListMembers(context.Context, string, bool) ([]domain.Member, error) {
-	return f.members, f.err
+func (f *fakePairHistoryRepository) ListHistoricalPairs(_ context.Context, organization string) ([]domain.HistoricalRound, error) {
+	f.organization = organization
+	f.calls++
+	return f.history, f.err
 }
 
-func TestPairHistoryResolvesInactivePairsAndTriples(t *testing.T) {
+func TestPairHistoryMapsResolvedInactivePairsAndTriples(t *testing.T) {
+	member1 := domain.Member{Organization: "o", Email: "a@x", Name: "A", Active: false, Metadata: map[string]string{"team": "1"}, LastRoundWith: map[string]int{"b@x": 1}}
+	member2 := domain.Member{Organization: "o", Email: "b@x", Name: "B", Active: true}
+	extra := domain.Member{Organization: "o", Email: "c@x", Name: "C", Active: false}
 	repository := &fakePairHistoryRepository{
-		rounds: []domain.Round{
-			{ID: 0, ScheduledAt: time.Now(), Pairs: []domain.Pair{}},
-			{ID: 1, ScheduledAt: time.Now(), Pairs: []domain.Pair{{ID1: "a@x", ID2: "b@x"}}},
-			{ID: 2, ScheduledAt: time.Now(), Pairs: []domain.Pair{{ID1: "a@x", ID2: "b@x", ExtraID: "c@x"}}},
-		},
-		members: []domain.Member{
-			{Organization: "o", Email: "a@x", Name: "A", Active: false, Metadata: map[string]string{"team": "1"}, LastRoundWith: map[string]int{"b@x": 1}},
-			{Organization: "o", Email: "b@x", Name: "B", Active: true},
-			{Organization: "o", Email: "c@x", Name: "C", Active: false},
+		history: []domain.HistoricalRound{
+			{Round: domain.Round{ID: 0, ScheduledAt: time.Now()}, Pairs: []domain.HistoricalPair{}},
+			{Round: domain.Round{ID: 1, ScheduledAt: time.Now()}, Pairs: []domain.HistoricalPair{{Pair: domain.Pair{ID1: "a@x", ID2: "b@x"}, Member1: member1, Member2: member2}}},
+			{Round: domain.Round{ID: 2, ScheduledAt: time.Now()}, Pairs: []domain.HistoricalPair{{Pair: domain.Pair{ID1: "a@x", ID2: "b@x", ExtraID: "c@x"}, Member1: member1, Member2: member2, ExtraMember: &extra}}},
 		},
 	}
-	result, err := NewPairHistoryService(repository).ListHistory(context.Background(), "o")
+	result, err := NewPairHistoryService(repository).ListHistory(context.Background(), " o ")
 	if err != nil || len(result.RoundPairs) != 3 || result.RoundPairs[0] == nil || len(result.RoundPairs[0]) != 0 || result.RoundPairs[1][0].Member1.Name != "A" || result.RoundPairs[1][0].ExtraMember.Email != "" || result.RoundPairs[2][0].ExtraMember.Name != "C" {
 		t.Fatalf("ListHistory() = %#v, %v", result, err)
 	}
+	if repository.calls != 1 || repository.organization != "o" {
+		t.Fatalf("ListHistoricalPairs calls = %d, organization = %q", repository.calls, repository.organization)
+	}
 
-	repository.rounds[1].Pairs[0].ID2 = "missing@x"
+	injected := domain.NewIntegrityError("pair history", "injected dangling reference", nil)
+	repository.err = injected
 	_, err = NewPairHistoryService(repository).ListHistory(context.Background(), "o")
-	if !domain.IsIntegrity(err) || !strings.Contains(err.Error(), "missing@x") {
-		t.Fatalf("dangling history error = %v", err)
+	if err != injected {
+		t.Fatalf("repository error = %v; want unchanged %v", err, injected)
 	}
 }
 

@@ -179,6 +179,15 @@ func (p Pair) String() string {
 	return fmt.Sprintf("%-40s %-40s %-40s", p.ID1, p.ID2, p.ExtraID)
 }
 
+// HistoricalPair resolves a stored pair or triple to complete member records.
+// Inactive members remain valid, and ExtraMember is nil for a two-person pair.
+type HistoricalPair struct {
+	Pair        Pair
+	Member1     Member
+	Member2     Member
+	ExtraMember *Member
+}
+
 // Round is one scheduled organization pairing round and its completion state.
 type Round struct {
 	Organization string    `json:"organization"`
@@ -189,6 +198,13 @@ type Round struct {
 	// ClaimToken identifies the scheduler lease that owns this round and is
 	// never exposed through HTTP JSON.
 	ClaimToken string `json:"-"`
+}
+
+// HistoricalRound groups resolved pairs in their stored order under the round
+// that owns them.
+type HistoricalRound struct {
+	Round Round
+	Pairs []HistoricalPair
 }
 
 // NewRound validates and constructs an unfinished scheduled round.

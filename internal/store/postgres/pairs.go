@@ -10,21 +10,6 @@ import (
 	"github.com/johnamadeo/mealbot/internal/domain"
 )
 
-// HistoricalPair resolves a stored pair or triple to complete member records.
-// ExtraMember is nil for a two-person pair. Inactive members remain visible.
-type HistoricalPair struct {
-	Pair        domain.Pair
-	Member1     domain.Member
-	Member2     domain.Member
-	ExtraMember *domain.Member
-}
-
-// HistoricalRound groups resolved pairings by their organization-local round.
-type HistoricalRound struct {
-	Round domain.Round
-	Pairs []HistoricalPair
-}
-
 // ListPairs returns stored member IDs grouped in ordered rounds.
 func (r *Repository) ListPairs(ctx context.Context, organization string) ([]domain.Round, error) {
 	organization = strings.TrimSpace(organization)
@@ -82,7 +67,7 @@ func (r *Repository) ListPairs(ctx context.Context, organization string) ([]doma
 // ListHistoricalPairs resolves pair IDs using all members, including inactive
 // ones. Missing references return a typed integrity error rather than a
 // zero-value member.
-func (r *Repository) ListHistoricalPairs(ctx context.Context, organization string) ([]HistoricalRound, error) {
+func (r *Repository) ListHistoricalPairs(ctx context.Context, organization string) ([]domain.HistoricalRound, error) {
 	rounds, err := r.ListPairs(ctx, organization)
 	if err != nil {
 		return nil, err
@@ -95,9 +80,9 @@ func (r *Repository) ListHistoricalPairs(ctx context.Context, organization strin
 	for _, member := range members {
 		byEmail[member.Email] = member
 	}
-	history := make([]HistoricalRound, 0, len(rounds))
+	history := make([]domain.HistoricalRound, 0, len(rounds))
 	for _, round := range rounds {
-		group := HistoricalRound{Round: round, Pairs: make([]HistoricalPair, 0, len(round.Pairs))}
+		group := domain.HistoricalRound{Round: round, Pairs: make([]domain.HistoricalPair, 0, len(round.Pairs))}
 		for _, pair := range round.Pairs {
 			member1, ok := byEmail[pair.ID1]
 			if !ok {
@@ -107,7 +92,7 @@ func (r *Repository) ListHistoricalPairs(ctx context.Context, organization strin
 			if !ok {
 				return nil, missingPairMember(organization, round.ID, pair.ID2)
 			}
-			resolved := HistoricalPair{Pair: pair, Member1: member1, Member2: member2}
+			resolved := domain.HistoricalPair{Pair: pair, Member1: member1, Member2: member2}
 			if pair.ExtraID != "" {
 				extra, ok := byEmail[pair.ExtraID]
 				if !ok {

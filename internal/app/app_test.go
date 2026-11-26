@@ -82,8 +82,8 @@ func (*fakeRepository) AddRound(_ context.Context, organization string, at time.
 }
 func (*fakeRepository) RescheduleRound(context.Context, string, int, time.Time) error { return nil }
 func (*fakeRepository) DeleteRound(context.Context, string, int) error                { return nil }
-func (*fakeRepository) ListPairs(context.Context, string) ([]domain.Round, error) {
-	return []domain.Round{}, nil
+func (*fakeRepository) ListHistoricalPairs(context.Context, string) ([]domain.HistoricalRound, error) {
+	return []domain.HistoricalRound{}, nil
 }
 func (*fakeRepository) ClaimDueRounds(context.Context, time.Time, time.Time, int) ([]domain.Round, error) {
 	return []domain.Round{}, nil
