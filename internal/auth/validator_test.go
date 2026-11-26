@@ -26,14 +26,12 @@ type recordingKeySource struct {
 	key   *rsa.PublicKey
 	err   error
 	calls int
-	kids  []string
 }
 
-func (s *recordingKeySource) Key(_ context.Context, kid string) (*rsa.PublicKey, error) {
+func (s *recordingKeySource) Key(_ context.Context, _ string) (*rsa.PublicKey, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
-	s.kids = append(s.kids, kid)
 	return s.key, s.err
 }
 
