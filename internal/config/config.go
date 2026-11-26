@@ -13,14 +13,16 @@ import (
 )
 
 const (
-	defaultPort           = 8080
-	defaultStaticDir      = "static"
-	defaultRequestTimeout = 15 * time.Second
-	defaultJWKSTimeout    = 5 * time.Second
-	defaultMailTimeout    = 10 * time.Second
-	defaultAuth0Issuer    = "https://mealbot.auth0.com/"
-	defaultAuth0Audience  = "https://mealbot-2.herokuapp.com/"
-	defaultAuth0JWKSURL   = "https://mealbot.auth0.com/.well-known/jwks.json"
+	defaultPort              = 8080
+	defaultStaticDir         = "static"
+	defaultRequestTimeout    = 15 * time.Second
+	defaultJWKSTimeout       = 5 * time.Second
+	defaultMailTimeout       = 10 * time.Second
+	defaultPairingClaimLimit = 100
+	defaultPairingClaimLease = 15 * time.Minute
+	defaultAuth0Issuer       = "https://mealbot.auth0.com/"
+	defaultAuth0Audience     = "https://mealbot-2.herokuapp.com/"
+	defaultAuth0JWKSURL      = "https://mealbot.auth0.com/.well-known/jwks.json"
 )
 
 // Mode identifies the validation policy applied to a configuration.
@@ -56,6 +58,8 @@ type Values struct {
 	RequestTimeout     time.Duration
 	JWKSTimeout        time.Duration
 	MailTimeout        time.Duration
+	PairingClaimLimit  int
+	PairingClaimLease  time.Duration
 }
 
 // Database contains one validated database connection selection. URL is set
@@ -83,16 +87,18 @@ type Mailgun struct {
 // Config is an immutable, validated application configuration. Its accessors
 // return values or defensive copies, so callers cannot mutate shared state.
 type Config struct {
-	mode           Mode
-	port           int
-	database       Database
-	auth0          Auth0
-	mailgun        Mailgun
-	staticDir      string
-	allowedOrigins []string
-	requestTimeout time.Duration
-	jwksTimeout    time.Duration
-	mailTimeout    time.Duration
+	mode              Mode
+	port              int
+	database          Database
+	auth0             Auth0
+	mailgun           Mailgun
+	staticDir         string
+	allowedOrigins    []string
+	requestTimeout    time.Duration
+	jwksTimeout       time.Duration
+	mailTimeout       time.Duration
+	pairingClaimLimit int
+	pairingClaimLease time.Duration
 }
 
 // New validates typed values and returns an immutable Config. It applies safe,
@@ -108,16 +114,18 @@ func New(values Values) (Config, error) {
 
 	database := Database{URL: values.DatabaseURL, User: values.DBUser, Name: values.DBName}
 	return Config{
-		mode:           values.Mode,
-		port:           values.Port,
-		database:       database,
-		auth0:          Auth0{Issuer: values.Auth0Issuer, Audience: values.Auth0Audience, JWKSURL: values.Auth0JWKSURL},
-		mailgun:        Mailgun{SMTPLogin: values.MailgunSMTPLogin, Domain: values.MailgunDomain, APIKey: values.MailgunAPIKey},
-		staticDir:      values.StaticDir,
-		allowedOrigins: append([]string(nil), values.AllowedCORSOrigins...),
-		requestTimeout: values.RequestTimeout,
-		jwksTimeout:    values.JWKSTimeout,
-		mailTimeout:    values.MailTimeout,
+		mode:              values.Mode,
+		port:              values.Port,
+		database:          database,
+		auth0:             Auth0{Issuer: values.Auth0Issuer, Audience: values.Auth0Audience, JWKSURL: values.Auth0JWKSURL},
+		mailgun:           Mailgun{SMTPLogin: values.MailgunSMTPLogin, Domain: values.MailgunDomain, APIKey: values.MailgunAPIKey},
+		staticDir:         values.StaticDir,
+		allowedOrigins:    append([]string(nil), values.AllowedCORSOrigins...),
+		requestTimeout:    values.RequestTimeout,
+		jwksTimeout:       values.JWKSTimeout,
+		mailTimeout:       values.MailTimeout,
+		pairingClaimLimit: values.PairingClaimLimit,
+		pairingClaimLease: values.PairingClaimLease,
 	}, nil
 }
 
@@ -148,6 +156,20 @@ func FromLookup(lookup LookupFunc) (Config, error) {
 		return Config{}, err
 	}
 	if err := validatePort(port); err != nil {
+		return Config{}, err
+	}
+	pairingClaimLimit, err := parseInt(lookup, "PAIRING_CLAIM_LIMIT", defaultPairingClaimLimit)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := validatePositiveInt("PAIRING_CLAIM_LIMIT", pairingClaimLimit); err != nil {
+		return Config{}, err
+	}
+	pairingClaimLease, err := parseDuration(lookup, "PAIRING_CLAIM_LEASE", defaultPairingClaimLease)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := validatePositiveDuration("PAIRING_CLAIM_LEASE", pairingClaimLease); err != nil {
 		return Config{}, err
 	}
 	requestTimeout, err := parseDuration(lookup, "REQUEST_TIMEOUT", defaultRequestTimeout)
@@ -191,6 +213,8 @@ func FromLookup(lookup LookupFunc) (Config, error) {
 		RequestTimeout:     requestTimeout,
 		JWKSTimeout:        jwksTimeout,
 		MailTimeout:        mailTimeout,
+		PairingClaimLimit:  pairingClaimLimit,
+		PairingClaimLease:  pairingClaimLease,
 	})
 }
 
@@ -226,6 +250,12 @@ func (c Config) JWKSTimeout() time.Duration { return c.jwksTimeout }
 // MailTimeout returns the timeout for one mail delivery call.
 func (c Config) MailTimeout() time.Duration { return c.mailTimeout }
 
+// PairingClaimLimit returns the maximum number of due rounds leased by one scheduler invocation.
+func (c Config) PairingClaimLimit() int { return c.pairingClaimLimit }
+
+// PairingClaimLease returns how long an unfinished round claim remains exclusive before retry.
+func (c Config) PairingClaimLease() time.Duration { return c.pairingClaimLease }
+
 func withDefaults(values Values) Values {
 	if values.Mode == "" {
 		values.Mode = Development
@@ -244,6 +274,12 @@ func withDefaults(values Values) Values {
 	}
 	if values.MailTimeout == 0 {
 		values.MailTimeout = defaultMailTimeout
+	}
+	if values.PairingClaimLimit == 0 {
+		values.PairingClaimLimit = defaultPairingClaimLimit
+	}
+	if values.PairingClaimLease == 0 {
+		values.PairingClaimLease = defaultPairingClaimLease
 	}
 	return values
 }
@@ -294,6 +330,12 @@ func validateValues(values Values) error {
 	if err := validatePositiveDuration("MAIL_TIMEOUT", values.MailTimeout); err != nil {
 		return err
 	}
+	if err := validatePositiveInt("PAIRING_CLAIM_LIMIT", values.PairingClaimLimit); err != nil {
+		return err
+	}
+	if err := validatePositiveDuration("PAIRING_CLAIM_LEASE", values.PairingClaimLease); err != nil {
+		return err
+	}
 	if err := validateDatabase(values); err != nil {
 		return err
 	}
@@ -329,6 +371,13 @@ func validatePort(port int) error {
 }
 
 func validatePositiveDuration(name string, value time.Duration) error {
+	if value <= 0 {
+		return fmt.Errorf("config: %s must be positive", name)
+	}
+	return nil
+}
+
+func validatePositiveInt(name string, value int) error {
 	if value <= 0 {
 		return fmt.Errorf("config: %s must be positive", name)
 	}

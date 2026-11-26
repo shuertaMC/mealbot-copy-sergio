@@ -13,6 +13,11 @@ import (
 	"github.com/johnamadeo/mealbot/internal/mailer"
 )
 
+const (
+	testClaimLimit = 100
+	testClaimLease = 15 * time.Minute
+)
+
 func TestSchedulerClaimsDeliversThenPersists(t *testing.T) {
 	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.FixedZone("offset", 3600))
 	repository := &schedulerRepository{
@@ -25,7 +30,7 @@ func TestSchedulerClaimsDeliversThenPersists(t *testing.T) {
 	if err := scheduler.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !repository.claimNow.Equal(now.UTC()) || !repository.staleBefore.Equal(now.UTC().Add(-defaultClaimLease)) || repository.claimLimit != defaultClaimLimit {
+	if !repository.claimNow.Equal(now.UTC()) || !repository.staleBefore.Equal(now.UTC().Add(-testClaimLease)) || repository.claimLimit != testClaimLimit {
 		t.Fatalf("claim = %v %v %d", repository.claimNow, repository.staleBefore, repository.claimLimit)
 	}
 	if len(delivery.messages) != 2 || repository.persistCalls != 1 || len(repository.persisted) != 2 || len(repository.released) != 0 {
@@ -220,16 +225,30 @@ func TestSchedulerValidationAndClock(t *testing.T) {
 		Members: repository, Traits: repository, Rounds: repository, Persistence: repository,
 		Delivery: &recordingDelivery{}, Clock: ClockFunc(func() time.Time { return time.Now() }),
 		RandomInt: func(int) int { return 0 }, SMTPLogin: "bot@example.test",
+		ClaimLimit: testClaimLimit, ClaimLease: testClaimLease,
 	}
 	withoutSMTP := base
 	withoutSMTP.SMTPLogin = " "
 	if _, err := NewScheduler(withoutSMTP); err == nil {
 		t.Fatal("NewScheduler accepted empty SMTP login")
 	}
-	badClaim := base
-	badClaim.ClaimLimit = -1
-	if _, err := NewScheduler(badClaim); err == nil {
-		t.Fatal("NewScheduler accepted negative claim limit")
+	invalidClaims := []struct {
+		name   string
+		mutate func(*SchedulerConfig)
+	}{
+		{name: "zero limit", mutate: func(config *SchedulerConfig) { config.ClaimLimit = 0 }},
+		{name: "negative limit", mutate: func(config *SchedulerConfig) { config.ClaimLimit = -1 }},
+		{name: "zero lease", mutate: func(config *SchedulerConfig) { config.ClaimLease = 0 }},
+		{name: "negative lease", mutate: func(config *SchedulerConfig) { config.ClaimLease = -1 }},
+	}
+	for _, test := range invalidClaims {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := base
+			test.mutate(&invalid)
+			if _, err := NewScheduler(invalid); err == nil {
+				t.Fatalf("NewScheduler accepted %s", test.name)
+			}
+		})
 	}
 	zeroClock := base
 	zeroClock.Clock = ClockFunc(func() time.Time { return time.Time{} })
@@ -328,7 +347,7 @@ func mustScheduler(t *testing.T, repository *schedulerRepository, delivery *reco
 	scheduler, err := NewScheduler(SchedulerConfig{
 		Members: repository, Traits: repository, Rounds: repository, Persistence: repository,
 		Delivery: delivery, Clock: clock, RandomInt: func(int) int { return 0 },
-		SMTPLogin: "bot@example.test",
+		SMTPLogin: "bot@example.test", ClaimLimit: testClaimLimit, ClaimLease: testClaimLease,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -197,6 +197,8 @@ func ProductionFactories() Factories {
 				Members: repository, Traits: repository, Rounds: repository,
 				Persistence: repository, Delivery: delivery, Clock: clock,
 				RandomInt: randomInt, SMTPLogin: configuration.Mailgun().SMTPLogin,
+				ClaimLimit: configuration.PairingClaimLimit(),
+				ClaimLease: configuration.PairingClaimLease(),
 			})
 		},
 		NewServer: newHTTPServer,

@@ -39,14 +39,17 @@ func testConfig(t *testing.T) config.Config {
 }
 
 type fakeRepository struct {
-	mutex           sync.Mutex
-	organizations   []domain.Organization
-	migrateErr      error
-	reconstructErr  error
-	closeErr        error
-	migrations      int
-	reconstructions int
-	closes          int
+	mutex            sync.Mutex
+	organizations    []domain.Organization
+	migrateErr       error
+	reconstructErr   error
+	closeErr         error
+	migrations       int
+	reconstructions  int
+	closes           int
+	claimNow         time.Time
+	claimStaleBefore time.Time
+	claimLimit       int
 }
 
 func (r *fakeRepository) ListOrganizations(_ context.Context, admin string) ([]domain.Organization, error) {
@@ -85,7 +88,10 @@ func (*fakeRepository) DeleteRound(context.Context, string, int) error          
 func (*fakeRepository) ListHistoricalPairs(context.Context, string) ([]domain.HistoricalRound, error) {
 	return []domain.HistoricalRound{}, nil
 }
-func (*fakeRepository) ClaimDueRounds(context.Context, time.Time, time.Time, int) ([]domain.Round, error) {
+func (r *fakeRepository) ClaimDueRounds(_ context.Context, now, staleBefore time.Time, limit int) ([]domain.Round, error) {
+	r.claimNow = now
+	r.claimStaleBefore = staleBefore
+	r.claimLimit = limit
 	return []domain.Round{}, nil
 }
 func (*fakeRepository) ReleaseRoundClaim(context.Context, string, int, string) error { return nil }
@@ -394,5 +400,27 @@ func TestProductionFactoriesAndRandomAreConstructible(t *testing.T) {
 		if value := random(3); value < 0 || value >= 3 {
 			t.Fatalf("random value = %d", value)
 		}
+	}
+}
+
+func TestProductionSchedulerUsesConfiguredClaimPolicy(t *testing.T) {
+	configuration, err := config.New(config.Values{
+		DBUser: "test", DBName: "mealbot",
+		MailgunSMTPLogin: "bot@example.com", MailgunDomain: "example.com", MailgunAPIKey: "key",
+		PairingClaimLimit: 7, PairingClaimLease: 37 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := &fakeRepository{}
+	scheduler, err := ProductionFactories().NewScheduler(repository, fakeDelivery{}, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if repository.claimLimit != 7 || repository.claimNow.Sub(repository.claimStaleBefore) != 37*time.Minute {
+		t.Fatalf("claim policy = limit %d lease %v", repository.claimLimit, repository.claimNow.Sub(repository.claimStaleBefore))
 	}
 }

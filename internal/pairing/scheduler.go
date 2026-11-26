@@ -11,11 +11,6 @@ import (
 	"github.com/johnamadeo/mealbot/internal/mailer"
 )
 
-const (
-	defaultClaimLimit = 100
-	defaultClaimLease = 15 * time.Minute
-)
-
 // MemberLoader loads active members for a pairing round.
 type MemberLoader interface {
 	ListMembers(ctx context.Context, organization string, activeOnly bool) ([]domain.Member, error)
@@ -84,7 +79,7 @@ type Scheduler struct {
 	claimLease  time.Duration
 }
 
-// NewScheduler validates dependencies and applies claim defaults.
+// NewScheduler validates dependencies and requires an explicit positive claim policy.
 func NewScheduler(config SchedulerConfig) (*Scheduler, error) {
 	if config.Members == nil || config.Traits == nil || config.Rounds == nil || config.Persistence == nil || config.Delivery == nil || config.Clock == nil || config.RandomInt == nil {
 		return nil, errors.New("pairing scheduler: all dependencies are required")
@@ -92,13 +87,7 @@ func NewScheduler(config SchedulerConfig) (*Scheduler, error) {
 	if strings.TrimSpace(config.SMTPLogin) == "" {
 		return nil, errors.New("pairing scheduler: SMTP login is required")
 	}
-	if config.ClaimLimit == 0 {
-		config.ClaimLimit = defaultClaimLimit
-	}
-	if config.ClaimLease == 0 {
-		config.ClaimLease = defaultClaimLease
-	}
-	if config.ClaimLimit < 0 || config.ClaimLease < 0 {
+	if config.ClaimLimit <= 0 || config.ClaimLease <= 0 {
 		return nil, errors.New("pairing scheduler: claim limit and lease must be positive")
 	}
 	return &Scheduler{

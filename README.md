@@ -78,6 +78,8 @@ Configuration is read once at process startup. Durations use Go syntax such as `
 | `REQUEST_TIMEOUT` | `15s` | Inbound request plus server read/write timeout. |
 | `JWKS_TIMEOUT` | `5s` | Maximum duration of one JWKS retrieval. |
 | `MAIL_TIMEOUT` | `10s` | Maximum duration of one Mailgun delivery. |
+| `PAIRING_CLAIM_LIMIT` | `100` | Positive maximum number of due rounds claimed by one scheduler invocation. |
+| `PAIRING_CLAIM_LEASE` | `15m` | Positive interval after which an unfinished claim is eligible for retry. |
 
 Production secrets must come from the deployment secret store, must never be committed or printed, and should use least-privilege credentials with a rotation policy. Use HTTPS Auth0 endpoints, TLS-verified PostgreSQL connections, and separate development/test/production databases and provider accounts.
 

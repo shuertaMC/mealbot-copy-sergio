@@ -49,6 +49,12 @@ func TestFromMapAppliesDevelopmentDefaults(t *testing.T) {
 	if configured.MailTimeout() != defaultMailTimeout {
 		t.Errorf("MailTimeout() = %v", configured.MailTimeout())
 	}
+	if configured.PairingClaimLimit() != defaultPairingClaimLimit {
+		t.Errorf("PairingClaimLimit() = %d", configured.PairingClaimLimit())
+	}
+	if configured.PairingClaimLease() != defaultPairingClaimLease {
+		t.Errorf("PairingClaimLease() = %v", configured.PairingClaimLease())
+	}
 }
 
 func TestFromMapAcceptsCompleteDevelopmentAuth0Override(t *testing.T) {
@@ -110,6 +116,9 @@ func TestFromMapParsesCompleteProductionConfiguration(t *testing.T) {
 	if configured.RequestTimeout() != 20*time.Second || configured.JWKSTimeout() != 3*time.Second || configured.MailTimeout() != 7*time.Second {
 		t.Errorf("timeouts = %v/%v/%v", configured.RequestTimeout(), configured.JWKSTimeout(), configured.MailTimeout())
 	}
+	if configured.PairingClaimLimit() != 37 || configured.PairingClaimLease() != 45*time.Minute {
+		t.Errorf("pairing claim policy = %d/%v", configured.PairingClaimLimit(), configured.PairingClaimLease())
+	}
 }
 
 func TestNewTrimsValuesAndProtectsMutableInput(t *testing.T) {
@@ -131,6 +140,9 @@ func TestNewTrimsValuesAndProtectsMutableInput(t *testing.T) {
 	}
 	if got := configured.Database().URL; got != "postgresql://localhost/mealbot" {
 		t.Errorf("Database().URL = %q", got)
+	}
+	if configured.PairingClaimLimit() != defaultPairingClaimLimit || configured.PairingClaimLease() != defaultPairingClaimLease {
+		t.Errorf("pairing claim defaults = %d/%v", configured.PairingClaimLimit(), configured.PairingClaimLease())
 	}
 	assertStrings(t, configured.AllowedCORSOrigins(), []string{"https://app.example.test"})
 }
@@ -171,6 +183,12 @@ func TestFromMapRejectsInvalidValues(t *testing.T) {
 		{name: "request duration zero", changes: map[string]string{"REQUEST_TIMEOUT": "0s"}, want: "REQUEST_TIMEOUT must be positive"},
 		{name: "jwks duration negative", changes: map[string]string{"JWKS_TIMEOUT": "-1s"}, want: "JWKS_TIMEOUT must be positive"},
 		{name: "mail duration zero", changes: map[string]string{"MAIL_TIMEOUT": "0s"}, want: "MAIL_TIMEOUT must be positive"},
+		{name: "pairing claim limit syntax", changes: map[string]string{"PAIRING_CLAIM_LIMIT": "many"}, want: "PAIRING_CLAIM_LIMIT must be an integer"},
+		{name: "pairing claim limit zero", changes: map[string]string{"PAIRING_CLAIM_LIMIT": "0"}, want: "PAIRING_CLAIM_LIMIT must be positive"},
+		{name: "pairing claim limit negative", changes: map[string]string{"PAIRING_CLAIM_LIMIT": "-1"}, want: "PAIRING_CLAIM_LIMIT must be positive"},
+		{name: "pairing claim lease syntax", changes: map[string]string{"PAIRING_CLAIM_LEASE": "later"}, want: "PAIRING_CLAIM_LEASE must be a duration"},
+		{name: "pairing claim lease zero", changes: map[string]string{"PAIRING_CLAIM_LEASE": "0s"}, want: "PAIRING_CLAIM_LEASE must be positive"},
+		{name: "pairing claim lease negative", changes: map[string]string{"PAIRING_CLAIM_LEASE": "-1s"}, want: "PAIRING_CLAIM_LEASE must be positive"},
 		{name: "unknown mode", changes: map[string]string{"APP_ENV": "staging"}, want: "APP_ENV must be"},
 		{name: "missing database", remove: []string{"DATABASE_URL"}, want: "DATABASE_URL or both DB_USER and DB_NAME"},
 		{name: "partial local database", remove: []string{"DATABASE_URL"}, changes: map[string]string{"DB_USER": "local"}, want: "DATABASE_URL or both DB_USER and DB_NAME"},
@@ -218,6 +236,8 @@ func TestNewRejectsTypedValidationFailures(t *testing.T) {
 		{name: "negative request timeout", mutate: func(values *Values) { values.RequestTimeout = -1 }, want: "REQUEST_TIMEOUT"},
 		{name: "negative jwks timeout", mutate: func(values *Values) { values.JWKSTimeout = -1 }, want: "JWKS_TIMEOUT"},
 		{name: "negative mail timeout", mutate: func(values *Values) { values.MailTimeout = -1 }, want: "MAIL_TIMEOUT"},
+		{name: "negative pairing claim limit", mutate: func(values *Values) { values.PairingClaimLimit = -1 }, want: "PAIRING_CLAIM_LIMIT"},
+		{name: "negative pairing claim lease", mutate: func(values *Values) { values.PairingClaimLease = -1 }, want: "PAIRING_CLAIM_LEASE"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -346,6 +366,8 @@ func completeProductionMap() map[string]string {
 		"REQUEST_TIMEOUT":      "20s",
 		"JWKS_TIMEOUT":         "3s",
 		"MAIL_TIMEOUT":         "7s",
+		"PAIRING_CLAIM_LIMIT":  "37",
+		"PAIRING_CLAIM_LEASE":  "45m",
 	}
 }
 
